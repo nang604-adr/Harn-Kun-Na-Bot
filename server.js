@@ -20,6 +20,7 @@ const LIFF_URL = process.env.LIFF_URL || 'https://liff.line.me/2009937945-DrzlxH
 // ลิงก์เปิดแอปตรง ๆ (Railway) — ใช้กับปุ่มในกลุ่ม เพื่อส่งค่า ?space ได้ชัวร์ทุกเครื่อง
 const APP_URL = process.env.APP_URL || 'https://harn-kun-na-bot-production.up.railway.app';
 const TRIGGERS = ['#หาร', '#หารกันนะ', '#หารเงิน'];
+const SUMMARY_TRIGGERS = ['#สรุป', '#ยอด', '#summary'];
 const PORT = process.env.PORT || 3000;
 
 const app = express();
@@ -217,6 +218,17 @@ async function handleEvent(event) {
   }
   if (event.type === 'message' && event.message.type === 'text') {
     const text = (event.message.text || '').trim();
+    // #สรุป -> โพสต์สรุปยอดของกลุ่มลงในแชต
+    if (SUMMARY_TRIGGERS.some((t) => text === t || text.startsWith(t))) {
+      const key = spaceKeyFromSource(event.source);
+      const data = key ? await loadSpace(key) : { trips: [] };
+      const tp = latestTrip(data);
+      if (!tp) {
+        return client.replyMessage(event.replyToken, { type: 'text', text: 'ยังไม่มีข้อมูลทริปในกลุ่มนี้ครับ พิมพ์ #หาร เพื่อเปิดแอปแล้วเริ่มบันทึกได้เลย' });
+      }
+      const mode = (data && data.roundMode) || 'baht';
+      return client.replyMessage(event.replyToken, { type: 'text', text: buildSummaryReply(tp, mode, liffLink(event)) });
+    }
     if (TRIGGERS.some((t) => text === t || text.startsWith(t))) {
       return client.replyMessage(event.replyToken, buildFlex(liffLink(event)));
     }
@@ -247,6 +259,77 @@ function buildFlex(link) {
       },
     },
   };
+}
+
+/* =========================================================
+   คำนวณยอด (mirror กับฝั่งแอป) สำหรับคำสั่ง #สรุป
+   ========================================================= */
+function splitCents(total, n) {
+  const b = Math.floor(total / n); let r = total - b * n; const o = [];
+  for (let i = 0; i < n; i++) o.push(b + (i < r ? 1 : 0));
+  return o;
+}
+function computeBalances(tp) {
+  const bal = {}; (tp.members || []).forEach((m) => bal[m.id] = { paid: 0, owed: 0, net: 0 });
+  let T = 0;
+  for (const e of (tp.expenses || [])) {
+    const c = Math.round(e.amount * 100); T += c;
+    if (bal[e.payerId]) bal[e.payerId].paid += c;
+    const sp = (e.splitIds || []).filter((id) => bal[id]); if (!sp.length) continue;
+    const parts = splitCents(c, sp.length); sp.forEach((id, i) => bal[id].owed += parts[i]);
+  }
+  Object.values(bal).forEach((b) => { b.paid /= 100; b.owed /= 100; b.net = b.paid - b.owed; });
+  return { bal, total: T / 100 };
+}
+function roundNetsToBaht(nets) {
+  const ids = Object.keys(nets); const ex = ids.map((i) => nets[i]); let r = ex.map((v) => Math.round(v));
+  let d = r.reduce((a, b) => a + b, 0); const res = ids.map((_, i) => r[i] - ex[i]); const o = ids.map((_, i) => i);
+  if (d > 0) { o.sort((a, b) => res[b] - res[a]); for (let k = 0; k < d && k < o.length; k++) r[o[k]] -= 1; }
+  else if (d < 0) { o.sort((a, b) => res[a] - res[b]); for (let k = 0; k < (-d) && k < o.length; k++) r[o[k]] += 1; }
+  const out = {}; ids.forEach((i, k) => out[i] = r[k]); return out;
+}
+function effectiveBalances(tp, mode) {
+  const { bal, total } = computeBalances(tp);
+  if (mode !== 'baht') return { bal, total };
+  const nets = {}; for (const id in bal) nets[id] = bal[id].net;
+  const rnet = roundNetsToBaht(nets); const b2 = {};
+  for (const id in bal) b2[id] = { paid: bal[id].paid, net: rnet[id], owed: bal[id].paid - rnet[id] };
+  return { bal: b2, total };
+}
+function settle(bal) {
+  const EPS = 0.005, cr = [], de = [];
+  for (const id in bal) { const net = Math.round(bal[id].net * 100) / 100; if (net > EPS) cr.push({ id, amt: net }); else if (net < -EPS) de.push({ id, amt: -net }); }
+  cr.sort((a, b) => b.amt - a.amt); de.sort((a, b) => b.amt - a.amt);
+  const r = []; let i = 0, j = 0;
+  while (i < de.length && j < cr.length) {
+    const p = Math.min(de[i].amt, cr[j].amt);
+    r.push({ from: de[i].id, to: cr[j].id, amount: Math.round(p * 100) / 100 });
+    de[i].amt -= p; cr[j].amt -= p; if (de[i].amt < EPS) i++; if (cr[j].amt < EPS) j++;
+  }
+  return r;
+}
+function fmtBaht(n) { const v = Math.round(n * 100) / 100; return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function latestTrip(data) {
+  const trips = (data && data.trips) || []; if (!trips.length) return null;
+  const sorted = [...trips].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  return sorted[0] || trips[trips.length - 1];
+}
+function memberName(tp, id) { const m = (tp.members || []).find((x) => x.id === id); return m ? m.name : '?'; }
+function buildSummaryReply(tp, mode, link) {
+  const { bal, total } = effectiveBalances(tp, mode);
+  const tx = settle(bal);
+  let s = `📋 สรุป: ${tp.name}\n💰 ยอดรวม ฿${fmtBaht(total)} · ${(tp.members || []).length} คน · ${(tp.expenses || []).length} รายการ\n`;
+  s += `\n👤 ยอดแต่ละคน\n`;
+  for (const m of (tp.members || [])) {
+    const b = bal[m.id] || { paid: 0, net: 0 }; const net = Math.round(b.net * 100) / 100;
+    const tag = net > 0.005 ? `ได้คืน ฿${fmtBaht(net)}` : (net < -0.005 ? `จ่ายเพิ่ม ฿${fmtBaht(-net)}` : 'ลงตัว');
+    s += `• ${m.name}: จ่าย ฿${fmtBaht(b.paid)} (${tag})\n`;
+  }
+  s += `\n🔁 ใครโอนให้ใคร\n`;
+  if (!tx.length) s += `ทุกคนเคลียร์กันแล้ว 🎉\n`;
+  else for (const t of tx) s += `• ${memberName(tp, t.from)} → ${memberName(tp, t.to)}: ฿${fmtBaht(t.amount)}\n`;
+  s += `\n📲 เปิดแอป: ${link}`;
+  return s;
 }
 
 dbInit()
