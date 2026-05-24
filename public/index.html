@@ -1189,17 +1189,17 @@ async function shareSummary(){
   const tp=trip();
   if(tp.expenses.length===0){ toast("ยังไม่มีค่าใช้จ่ายให้สรุป"); return; }
   const text=buildSummaryText();
-  // 1) LIFF shareTargetPicker
-  if(liffReady && liff.isApiAvailable && liff.isApiAvailable('shareTargetPicker')){
+  // 1) ถ้าเปิดจากกลุ่ม -> ให้บอทโพสต์สรุปเข้ากลุ่มนั้นเลย
+  if(space && (space.startsWith('group:') || space.startsWith('room:'))){
+    toast("กำลังส่งสรุปเข้ากลุ่ม...");
     try{
-      const res = await liff.shareTargetPicker([{type:'text', text}]);
-      if(res) toast("ส่งสรุปเข้า LINE แล้ว ✅");
-      return;
-    }catch(e){ /* fallback below */ }
+      const r = await fetch('/api/share', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({space, text})});
+      if(r.ok){ toast("ส่งสรุปเข้ากลุ่มแล้ว ✅"); return; }
+    }catch(e){ /* fallback ด้านล่าง */ }
   }
-  // 2) Web Share API
+  // 2) Web Share API (เลือกแชร์เอง)
   if(navigator.share){
-    try{ await navigator.share({text}); return; }catch(e){}
+    try{ await navigator.share({text}); return; }catch(e){ if(e&&e.name==='AbortError') return; }
   }
   // 3) คัดลอกข้อความ
   try{

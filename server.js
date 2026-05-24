@@ -171,6 +171,26 @@ app.get('/api/space/:id', async (req, res) => {
   catch (e) { res.status(500).json({ error: 'load failed' }); }
 });
 
+// ให้แอปสั่งบอทโพสต์สรุปเข้ากลุ่ม (ใช้ express.json เฉพาะ route นี้ ไม่กระทบ /webhook)
+app.post('/api/share', express.json({ limit: '256kb' }), async (req, res) => {
+  try {
+    if (!hasLineConfig || !client) return res.status(503).json({ error: 'no line config' });
+    const { space, text } = req.body || {};
+    let target = null;
+    if (typeof space === 'string') {
+      if (space.startsWith('group:')) target = space.slice(6);
+      else if (space.startsWith('room:')) target = space.slice(5);
+    }
+    if (!target) return res.status(400).json({ error: 'not a group/room' });
+    if (!text || typeof text !== 'string') return res.status(400).json({ error: 'no text' });
+    await client.pushMessage(target, { type: 'text', text: text.slice(0, 4900) });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('share error:', e.message);
+    res.status(500).json({ error: 'push failed' });
+  }
+});
+
 // webhook ของบอท
 if (hasLineConfig) {
   app.post('/webhook', line.middleware(config), async (req, res) => {
