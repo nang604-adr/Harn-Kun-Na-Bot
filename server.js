@@ -273,7 +273,7 @@ function computeBalances(tp) {
   const bal = {}; (tp.members || []).forEach((m) => bal[m.id] = { paid: 0, owed: 0, net: 0 });
   let T = 0;
   for (const e of (tp.expenses || [])) {
-    const c = Math.round(e.amount * 100); T += c;
+    const c = Math.round(e.amount * (e.rate || 1) * 100); T += c;   // แปลงเป็นบาท (รองรับหลายสกุล)
     if (bal[e.payerId]) bal[e.payerId].paid += c;
     const sp = (e.splitIds || []).filter((id) => bal[id]); if (!sp.length) continue;
     const parts = splitCents(c, sp.length); sp.forEach((id, i) => bal[id].owed += parts[i]);
