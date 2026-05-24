@@ -189,26 +189,42 @@ app.use((err, req, res, next) => {
   res.status(500).end();
 });
 
+/* สร้าง space key จาก source ของ event (กลุ่ม/ห้อง/เดี่ยว) */
+function spaceKeyFromSource(s) {
+  s = s || {};
+  if (s.groupId) return 'group:' + s.groupId;
+  if (s.roomId) return 'room:' + s.roomId;
+  if (s.userId) return 'user:' + s.userId;
+  return '';
+}
+/* ลิงก์ LIFF ที่ฝัง space ของกลุ่มนั้น ๆ ไว้ -> ทุกคนในกลุ่มเข้าพื้นที่เดียวกันแน่นอน */
+function liffLink(event) {
+  const key = spaceKeyFromSource(event.source);
+  return key ? (LIFF_URL + '?space=' + encodeURIComponent(key)) : LIFF_URL;
+}
+
 async function handleEvent(event) {
   if (event.type === 'join') {
+    const link = liffLink(event);
     return client.replyMessage(event.replyToken, [
       { type: 'text', text: 'สวัสดีครับ 👋 พิมพ์ #หาร เมื่อไหร่ก็ได้ เดี๋ยวผมส่งลิงก์เปิดแอปหารเงินให้' },
-      buildFlex(),
+      buildFlex(link),
     ]);
   }
   if (event.type === 'message' && event.message.type === 'text') {
     const text = (event.message.text || '').trim();
     if (TRIGGERS.some((t) => text === t || text.startsWith(t))) {
-      return client.replyMessage(event.replyToken, buildFlex());
+      return client.replyMessage(event.replyToken, buildFlex(liffLink(event)));
     }
   }
   return null;
 }
 
-function buildFlex() {
+function buildFlex(link) {
+  link = link || LIFF_URL;
   return {
     type: 'flex',
-    altText: 'เปิดแอปหารกันนะ 🧮 ' + LIFF_URL,
+    altText: 'เปิดแอปหารกันนะ 🧮 ' + link,
     contents: {
       type: 'bubble',
       body: {
@@ -222,7 +238,7 @@ function buildFlex() {
         type: 'box', layout: 'vertical',
         contents: [
           { type: 'button', style: 'primary', color: '#06C755',
-            action: { type: 'uri', label: 'เปิดแอป', uri: LIFF_URL } },
+            action: { type: 'uri', label: 'เปิดแอป', uri: link } },
         ],
       },
     },
