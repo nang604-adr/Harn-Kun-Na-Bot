@@ -17,6 +17,8 @@ const config = {
   channelSecret: process.env.LINE_CHANNEL_SECRET,
 };
 const LIFF_URL = process.env.LIFF_URL || 'https://liff.line.me/2009937945-DrzlxH49';
+// ลิงก์เปิดแอปตรง ๆ (Railway) — ใช้กับปุ่มในกลุ่ม เพื่อส่งค่า ?space ได้ชัวร์ทุกเครื่อง
+const APP_URL = process.env.APP_URL || 'https://harn-kun-na-bot-production.up.railway.app';
 const TRIGGERS = ['#หาร', '#หารกันนะ', '#หารเงิน'];
 const PORT = process.env.PORT || 3000;
 
@@ -197,10 +199,12 @@ function spaceKeyFromSource(s) {
   if (s.userId) return 'user:' + s.userId;
   return '';
 }
-/* ลิงก์ LIFF ที่ฝัง space ของกลุ่มนั้น ๆ ไว้ -> ทุกคนในกลุ่มเข้าพื้นที่เดียวกันแน่นอน */
+/* ลิงก์เปิดแอปที่ฝัง space ของกลุ่มนั้น ๆ ไว้ -> ทุกคนในกลุ่มเข้าพื้นที่เดียวกันแน่นอน
+   ใช้ APP_URL (Railway ตรง ๆ) เพราะส่งค่า ?space ผ่านได้ชัวร์กว่า liff.line.me */
 function liffLink(event) {
   const key = spaceKeyFromSource(event.source);
-  return key ? (LIFF_URL + '?space=' + encodeURIComponent(key)) : LIFF_URL;
+  const base = APP_URL.replace(/\/+$/, '');
+  return key ? (base + '/?space=' + encodeURIComponent(key)) : base;
 }
 
 async function handleEvent(event) {
