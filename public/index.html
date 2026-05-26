@@ -18,9 +18,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
 <style>
   :root{
-    --green:#06C755;
-    --green-dark:#04a847;
-    --green-soft:#e8f9ef;
+    --green:#1EB4ED;        /* Adrun blue (ชื่อตัวแปรคงเดิม) */
+    --green-dark:#0F8FBE;
+    --green-soft:#E3F4FC;
     --bg:#f4f6f8;
     --card:#ffffff;
     --text:#1d2b25;
@@ -74,7 +74,7 @@
   /* tabs */
   .tabs{display:flex;background:var(--card);border-radius:14px;padding:4px;box-shadow:var(--shadow);margin-bottom:16px;position:sticky;top:64px;z-index:20;}
   .tab{flex:1;text-align:center;padding:10px 4px;border-radius:11px;font-weight:600;font-size:13.5px;color:var(--muted);cursor:pointer;border:none;background:none;transition:.15s;}
-  .tab.active{background:var(--green);color:#fff;box-shadow:0 2px 6px rgba(6,199,85,.35);}
+  .tab.active{background:var(--green);color:#fff;box-shadow:0 2px 6px rgba(30,180,237,.35);}
 
   /* cards */
   .card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px;margin-bottom:12px;}
@@ -113,10 +113,10 @@
   .xtable thead th{background:var(--green-soft);color:var(--green-dark);font-weight:700;}
   .xtable th.lbl,.xtable td.lbl{text-align:left;position:sticky;left:0;background:var(--card);min-width:130px;border-right:1px solid var(--line);}
   .xtable thead th.lbl{background:var(--green-soft);z-index:3;}
-  .xtable td.payer-cell{background:rgba(6,199,85,.12);font-weight:700;color:var(--green-dark);}
+  .xtable td.payer-cell{background:rgba(30,180,237,.12);font-weight:700;color:var(--green-dark);}
   .xtable tbody tr:nth-child(even) td{background:#fafcfb;}
   .xtable tbody tr:nth-child(even) td.lbl{background:#fafcfb;}
-  .xtable tbody tr:nth-child(even) td.payer-cell{background:rgba(6,199,85,.14);}
+  .xtable tbody tr:nth-child(even) td.payer-cell{background:rgba(30,180,237,.14);}
   .xtable tfoot td{font-weight:700;background:var(--bg);border-top:2px solid var(--green);}
   .xtable tfoot td.lbl{background:var(--bg);}
   .xtable .muted{color:var(--muted);font-weight:400;}
@@ -152,7 +152,7 @@
   .settle .amt{margin-left:auto;font-weight:700;color:var(--text);white-space:nowrap;}
   .settle-actions{display:flex;gap:8px;margin-top:11px;flex-wrap:wrap;}
   .settle-actions .btn{flex:1;min-width:92px;}
-  .settle.paid{background:var(--green-soft);border-color:rgba(6,199,85,.35);}
+  .settle.paid{background:var(--green-soft);border-color:rgba(30,180,237,.35);}
   .settle.paid .amt{color:var(--green-dark);}
   .paid-badge{display:inline-block;background:var(--green);color:#fff;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:99px;margin-left:8px;vertical-align:middle;}
   .warn-line{font-size:11.5px;color:var(--amber);margin-top:7px;font-weight:600;}
@@ -164,7 +164,7 @@
 
   /* buttons */
   .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:none;border-radius:13px;padding:13px 18px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;transition:.15s;width:100%;}
-  .btn-primary{background:var(--green);color:#fff;box-shadow:0 3px 10px rgba(6,199,85,.3);}
+  .btn-primary{background:var(--green);color:#fff;box-shadow:0 3px 10px rgba(30,180,237,.3);}
   .btn-primary:active{transform:scale(.98);}
   .btn-light{background:var(--green-soft);color:var(--green-dark);}
   .btn-ghost{background:var(--bg);color:var(--text);border:1px solid var(--line);}
@@ -254,7 +254,7 @@
 const LIFF_ID = "2009937945-DrzlxH49"; // LIFF ID ของแอป หารกันนะ
 
 /* ---------- ค่าคงที่ ---------- */
-const AVATAR_COLORS = ["#06C755","#2f6feb","#f0a500","#e5484d","#8b5cf6","#0ea5e9","#ec4899","#14b8a6","#f97316","#6366f1"];
+const AVATAR_COLORS = ["#1EB4ED","#2f6feb","#f0a500","#e5484d","#8b5cf6","#0ea5e9","#ec4899","#14b8a6","#f97316","#6366f1"];
 const CATS = ["🍜","🏨","🚗","⛽","🎟️","🛒","☕","🍻","🎁","🏖️","✈️","💸"];
 const STORE_KEY = "harn_kan_na_v1";
 
@@ -1351,17 +1351,17 @@ function buildPrintable(tp){
   const wrap=document.createElement('div');
   wrap.style.cssText="position:absolute;left:-99999px;top:0;width:760px;background:#fff;color:#1d2b25;font-family:'Noto Sans Thai',sans-serif;padding:28px;box-sizing:border-box;";
   let h='<style>.hk{border-collapse:collapse}.hk td,.hk th{border:1px solid #cfd8d3}</style>';
-  h+=`<div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #06C755;padding-bottom:12px;margin-bottom:16px">
+  h+=`<div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #1EB4ED;padding-bottom:12px;margin-bottom:16px">
     <div><div style="font-size:24px;font-weight:700">${tp.emoji||'🧳'} ${esc(tp.name)}</div>
     <div style="font-size:13px;color:#7a8a83;margin-top:4px">สรุปค่าใช้จ่าย · ${metaCount} · ${tp.expenses.length} รายการ</div></div>
-    <div style="text-align:right"><div style="font-size:12px;color:#7a8a83">ยอดรวมทั้งหมด</div><div style="font-size:26px;font-weight:700;color:#04a847">฿${fmt(total)}</div></div></div>`;
+    <div style="text-align:right"><div style="font-size:12px;color:#7a8a83">ยอดรวมทั้งหมด</div><div style="font-size:26px;font-weight:700;color:#0F8FBE">฿${fmt(total)}</div></div></div>`;
   // ยอดของแต่ละบ้าน/คน
   h+=`<div style="font-size:15px;font-weight:700;margin:14px 0 8px">ยอดของแต่ละ${hasFam?'บ้าน':'คน'}</div>`;
   h+=`<table class="hk" style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px">
-    <tr style="background:#e8f9ef;color:#04a847"><th style="text-align:left;padding:8px 10px">${hasFam?'บ้าน':'ชื่อ'}</th><th style="text-align:right;padding:8px 10px">จ่ายจริง</th><th style="text-align:right;padding:8px 10px">ต้องหาร</th><th style="text-align:right;padding:8px 10px">สุทธิ</th></tr>`;
+    <tr style="background:#E3F4FC;color:#0F8FBE"><th style="text-align:left;padding:8px 10px">${hasFam?'บ้าน':'ชื่อ'}</th><th style="text-align:right;padding:8px 10px">จ่ายจริง</th><th style="text-align:right;padding:8px 10px">ต้องหาร</th><th style="text-align:right;padding:8px 10px">สุทธิ</th></tr>`;
   for(const u of units){
     const b=bal[u.key]; const net=Math.round(b.net*100)/100;
-    const col=net>0.005?'#04a847':(net<-0.005?'#e5484d':'#7a8a83');
+    const col=net>0.005?'#0F8FBE':(net<-0.005?'#e5484d':'#7a8a83');
     const tag=net>0.005?`+${fmt(net)} (ได้คืน)`:(net<-0.005?`-${fmt(-net)} (จ่ายเพิ่ม)`:'ลงตัว');
     const isFam=u.members.length>1||u.key.startsWith('f:');
     const nm=isFam?`${esc(u.name)} <span style="color:#7a8a83;font-weight:400;font-size:11px">(${esc(u.members.map(m=>m.name).join(', '))})</span>`:esc(u.name);
@@ -1371,7 +1371,7 @@ function buildPrintable(tp){
   // ตารางรายละเอียด
   h+=`<div style="font-size:15px;font-weight:700;margin:14px 0 8px">รายละเอียดแต่ละรายการ</div>`;
   h+=`<table class="hk" style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:18px">
-    <tr style="background:#e8f9ef;color:#04a847"><th style="text-align:left;padding:7px 8px">รายการ</th><th style="text-align:right;padding:7px 8px">ยอด</th>`;
+    <tr style="background:#E3F4FC;color:#0F8FBE"><th style="text-align:left;padding:7px 8px">รายการ</th><th style="text-align:right;padding:7px 8px">ยอด</th>`;
   for(const u of units) h+=`<th style="text-align:right;padding:7px 8px">${esc(u.name)}</th>`;
   h+=`</tr>`;
   for(const e of tp.expenses){
@@ -1381,13 +1381,13 @@ function buildPrintable(tp){
     const splitNoteP = e.splitBy==='family' ? ' · หารรายบ้าน' : '';
     h+=`<tr style="border-bottom:1px solid #e7ecea"><td style="padding:7px 8px"><b>${esc(e.desc||'ค่าใช้จ่าย')}</b><br><span style="color:#7a8a83;font-size:10px">จ่ายโดย ${payer?esc(payer.name):'?'}${e.date?' · '+fmtDate(e.date):''}${curNoteP}${splitNoteP}</span></td><td style="text-align:right;padding:7px 8px">฿${fmt(expTHB(e))}</td>`;
     for(const u of units){
-      const isP=u.key===payerKey; const sh=ush[u.key]; const bg=isP?'background:#eafaf0;':'';
+      const isP=u.key===payerKey; const sh=ush[u.key]; const bg=isP?'background:#DFF1FB;':'';
       if(sh!=null) h+=`<td style="text-align:right;padding:7px 8px;${bg}">฿${fmt(sh)}${isP?' 💳':''}</td>`;
       else h+=`<td style="text-align:right;padding:7px 8px;color:#aab;${bg}">${isP?'💳':'–'}</td>`;
     }
     h+=`</tr>`;
   }
-  h+=`<tr style="border-top:2px solid #06C755;font-weight:700;background:#f4f6f8"><td style="padding:7px 8px">รวมที่ต้องหาร</td><td style="text-align:right;padding:7px 8px">฿${fmt(total)}</td>`;
+  h+=`<tr style="border-top:2px solid #1EB4ED;font-weight:700;background:#f4f6f8"><td style="padding:7px 8px">รวมที่ต้องหาร</td><td style="text-align:right;padding:7px 8px">฿${fmt(total)}</td>`;
   for(const u of units) h+=`<td style="text-align:right;padding:7px 8px">฿${fmt(exact[u.key].owed)}</td>`;
   h+=`</tr><tr style="font-weight:700;background:#f4f6f8"><td style="padding:7px 8px">จ่ายจริง</td><td style="text-align:right;padding:7px 8px;color:#aab">–</td>`;
   for(const u of units) h+=`<td style="text-align:right;padding:7px 8px">฿${fmt(exact[u.key].paid)}</td>`;
@@ -1395,12 +1395,12 @@ function buildPrintable(tp){
   // การโอน
   h+=`<div style="font-size:15px;font-weight:700;margin:14px 0 8px">การโอน (น้อยครั้งที่สุด)</div>`;
   if(tx.length===0){
-    h+=`<div style="padding:12px;background:#e8f9ef;border-radius:8px;color:#04a847;font-weight:600">ทุกคนเคลียร์กันเรียบร้อย 🎉</div>`;
+    h+=`<div style="padding:12px;background:#E3F4FC;border-radius:8px;color:#0F8FBE;font-weight:600">ทุกคนเคลียร์กันเรียบร้อย 🎉</div>`;
   }else{
     h+=`<table class="hk" style="width:100%;border-collapse:collapse;font-size:13px">`;
     for(const t of tx){
       const rec=st[t.from+'->'+t.to]; const paid=rec&&rec.paid;
-      h+=`<tr style="border-bottom:1px solid #e7ecea"><td style="padding:8px 10px">${esc(unitByKey(units,t.from)?.name||'?')} → ${esc(unitByKey(units,t.to)?.name||'?')}</td><td style="text-align:right;padding:8px 10px;font-weight:700">฿${fmt(t.amount)}</td><td style="text-align:right;padding:8px 10px;color:${paid?'#04a847':'#e5484d'};font-weight:600">${paid?'✓ จ่ายแล้ว':'ยังไม่จ่าย'}</td></tr>`;
+      h+=`<tr style="border-bottom:1px solid #e7ecea"><td style="padding:8px 10px">${esc(unitByKey(units,t.from)?.name||'?')} → ${esc(unitByKey(units,t.to)?.name||'?')}</td><td style="text-align:right;padding:8px 10px;font-weight:700">฿${fmt(t.amount)}</td><td style="text-align:right;padding:8px 10px;color:${paid?'#0F8FBE':'#e5484d'};font-weight:600">${paid?'✓ จ่ายแล้ว':'ยังไม่จ่าย'}</td></tr>`;
     }
     const paidCount=tx.filter(t=>st[t.from+'->'+t.to]&&st[t.from+'->'+t.to].paid).length;
     h+=`</table><div style="font-size:12px;color:#7a8a83;margin-top:8px">เคลียร์แล้ว ${paidCount}/${tx.length} รายการ</div>`;
