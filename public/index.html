@@ -64,6 +64,9 @@
   .topbar .title{font-weight:700;font-size:17px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .topbar .sub{font-size:12px;opacity:.85;font-weight:400;}
   .topbar .icon-btn{background:rgba(255,255,255,.18);border:none;color:#fff;width:34px;height:34px;border-radius:10px;font-size:16px;display:flex;align-items:center;justify-content:center;cursor:pointer;}
+  .adrun-credit{display:inline-flex;align-items:center;gap:5px;background:rgba(0,0,0,.22);padding:3px 8px 3px 3px;border-radius:99px;color:#fff;text-decoration:none;font-size:10.5px;font-weight:600;opacity:.9;flex:0 0 auto;line-height:1;}
+  .adrun-credit img{width:22px;height:22px;border-radius:50%;display:block;background:#000;}
+  .adrun-credit:active{opacity:1;transform:scale(.97);}
 
   /* content */
   .content{flex:1;padding:16px;padding-bottom:120px;}
@@ -284,6 +287,12 @@ function colorFor(id){
 function avatar(member, cls=""){
   if(!member) return "";
   return `<span class="avatar ${cls}" style="background:${colorFor(member.id)}">${esc(initials(member.name))}</span>`;
+}
+function adrunCredit(){
+  return `<a class="adrun-credit" href="https://www.adrun.co.th/" target="_blank" rel="noopener" title="Developed by Adrun · adrun.co.th">
+    <img src="adrun-logo.png" alt="Adrun" />
+    <span>by Adrun</span>
+  </a>`;
 }
 /* ---------- แคชในเครื่อง (โหลดไว + กันออฟไลน์) ---------- */
 function cacheSave(){
@@ -576,7 +585,8 @@ function render(){
 /* ----- หน้ารายการทริป ----- */
 function renderTripList(){
   $("#topbar").innerHTML = `
-    <div class="title">หารกันนะ 🧮<div class="sub">${liffReady?(liffProfile?('สวัสดี '+esc(liffProfile.displayName)):'เชื่อมต่อ LINE แล้ว'):'หารค่าใช้จ่ายทริปกับเพื่อน'}</div></div>`;
+    <div class="title">หารกันนะ 🧮<div class="sub">${liffReady?(liffProfile?('สวัสดี '+esc(liffProfile.displayName)):'เชื่อมต่อ LINE แล้ว'):'หารค่าใช้จ่ายทริปกับเพื่อน'}</div></div>
+    ${adrunCredit()}`;
   let html = "";
   if(state.trips.length===0){
     html = `<div class="empty">
@@ -611,7 +621,8 @@ function renderTrip(){
   $("#topbar").innerHTML = `
     <button class="back" onclick="goTrips()">‹</button>
     <div class="title">${tp.emoji||'🧳'} ${esc(tp.name)}<div class="sub">${tp.members.length} คน · ${tp.expenses.length} รายการ</div></div>
-    <button class="icon-btn" onclick="openTripForm('${tp.id}')" title="แก้ไขทริป">✏️</button>`;
+    <button class="icon-btn" onclick="openTripForm('${tp.id}')" title="แก้ไขทริป">✏️</button>
+    ${adrunCredit()}`;
 
   const tabs = `<div class="tabs">
     <button class="tab ${tab==='exp'?'active':''}" onclick="setTab('exp')">ค่าใช้จ่าย</button>
