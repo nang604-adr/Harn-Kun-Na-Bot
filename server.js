@@ -289,17 +289,50 @@ function splitCents(total, n) {
   for (let i = 0; i < n; i++) o.push(b + (i < r ? 1 : 0));
   return o;
 }
+function memberById(tp, id) { return (tp.members || []).find((m) => m.id === id); }
+function memberUnitKey(m) { const f = (m.family || '').trim(); return f ? 'f:' + f : 'm:' + m.id; }
+function tripUnits(tp) {
+  const order = [], map = {};
+  for (const m of (tp.members || [])) {
+    const k = memberUnitKey(m);
+    if (!map[k]) { map[k] = { key: k, name: (m.family || '').trim() || m.name, members: [] }; order.push(k); }
+    map[k].members.push(m);
+  }
+  return order.map((k) => map[k]);
+}
+function unitExists(tp, key) { return (tp.members || []).some((m) => memberUnitKey(m) === key); }
+function expShares(tp, e) {
+  const cents = Math.round(e.amount * (e.rate || 1) * 100); const map = {};
+  if (e.splitBy === 'family') {
+    const fams = (e.splitFams || []).filter((k) => unitExists(tp, k)); if (!fams.length) return {};
+    const fp = splitCents(cents, fams.length);
+    fams.forEach((fk, i) => {
+      const fm = (tp.members || []).filter((m) => memberUnitKey(m) === fk); if (!fm.length) return;
+      const mp = splitCents(fp[i], fm.length); fm.forEach((m, j) => map[m.id] = (map[m.id] || 0) + mp[j] / 100);
+    });
+  } else {
+    const sp = (e.splitIds || []).filter((id) => memberById(tp, id)); if (!sp.length) return {};
+    const parts = splitCents(cents, sp.length); sp.forEach((id, i) => map[id] = parts[i] / 100);
+  }
+  return map;
+}
 function computeBalances(tp) {
   const bal = {}; (tp.members || []).forEach((m) => bal[m.id] = { paid: 0, owed: 0, net: 0 });
   let T = 0;
   for (const e of (tp.expenses || [])) {
-    const c = Math.round(e.amount * (e.rate || 1) * 100); T += c;   // แปลงเป็นบาท (รองรับหลายสกุล)
+    const c = Math.round(e.amount * (e.rate || 1) * 100); T += c;
     if (bal[e.payerId]) bal[e.payerId].paid += c;
-    const sp = (e.splitIds || []).filter((id) => bal[id]); if (!sp.length) continue;
-    const parts = splitCents(c, sp.length); sp.forEach((id, i) => bal[id].owed += parts[i]);
+    const sh = expShares(tp, e); for (const id in sh) { if (bal[id]) bal[id].owed += Math.round(sh[id] * 100); }
   }
   Object.values(bal).forEach((b) => { b.paid /= 100; b.owed /= 100; b.net = b.paid - b.owed; });
   return { bal, total: T / 100 };
+}
+function familyBalances(tp) {
+  const { bal: mbal, total } = computeBalances(tp); const units = tripUnits(tp);
+  const ubal = {}; units.forEach((u) => ubal[u.key] = { paid: 0, owed: 0, net: 0 });
+  for (const m of (tp.members || [])) { const k = memberUnitKey(m); const b = mbal[m.id]; if (b && ubal[k]) { ubal[k].paid += b.paid; ubal[k].owed += b.owed; } }
+  Object.values(ubal).forEach((b) => b.net = Math.round((b.paid - b.owed) * 100) / 100);
+  return { bal: ubal, total, units };
 }
 function roundNetsToBaht(nets) {
   const ids = Object.keys(nets); const ex = ids.map((i) => nets[i]); let r = ex.map((v) => Math.round(v));
@@ -308,13 +341,13 @@ function roundNetsToBaht(nets) {
   else if (d < 0) { o.sort((a, b) => res[a] - res[b]); for (let k = 0; k < (-d) && k < o.length; k++) r[o[k]] += 1; }
   const out = {}; ids.forEach((i, k) => out[i] = r[k]); return out;
 }
-function effectiveBalances(tp, mode) {
-  const { bal, total } = computeBalances(tp);
-  if (mode !== 'baht') return { bal, total };
-  const nets = {}; for (const id in bal) nets[id] = bal[id].net;
-  const rnet = roundNetsToBaht(nets); const b2 = {};
-  for (const id in bal) b2[id] = { paid: bal[id].paid, net: rnet[id], owed: bal[id].paid - rnet[id] };
-  return { bal: b2, total };
+function effectiveUnitBalances(tp, mode) {
+  const { bal, total, units } = familyBalances(tp);
+  if (mode !== 'baht') return { bal, total, units };
+  const nets = {}; for (const k in bal) nets[k] = bal[k].net;
+  const r = roundNetsToBaht(nets); const b2 = {};
+  for (const k in bal) b2[k] = { paid: bal[k].paid, net: r[k], owed: bal[k].paid - r[k] };
+  return { bal: b2, total, units };
 }
 function settle(bal) {
   const EPS = 0.005, cr = [], de = [];
@@ -334,20 +367,24 @@ function latestTrip(data) {
   const sorted = [...trips].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   return sorted[0] || trips[trips.length - 1];
 }
-function memberName(tp, id) { const m = (tp.members || []).find((x) => x.id === id); return m ? m.name : '?'; }
+function unitNameByKey(units, key) { const u = units.find((x) => x.key === key); return u ? u.name : '?'; }
 function buildSummaryReply(tp, mode, link) {
-  const { bal, total } = effectiveBalances(tp, mode);
+  const { bal, total, units } = effectiveUnitBalances(tp, mode);
   const tx = settle(bal);
-  let s = `📋 สรุป: ${tp.name}\n💰 ยอดรวม ฿${fmtBaht(total)} · ${(tp.members || []).length} คน · ${(tp.expenses || []).length} รายการ\n`;
-  s += `\n👤 ยอดแต่ละคน\n`;
-  for (const m of (tp.members || [])) {
-    const b = bal[m.id] || { paid: 0, net: 0 }; const net = Math.round(b.net * 100) / 100;
+  const hasFam = units.length < (tp.members || []).length;
+  const metaCount = hasFam ? `${units.length} บ้าน (${(tp.members || []).length} คน)` : `${(tp.members || []).length} คน`;
+  let s = `📋 สรุป: ${tp.name}\n💰 ยอดรวม ฿${fmtBaht(total)} · ${metaCount} · ${(tp.expenses || []).length} รายการ\n`;
+  s += `\n👤 ยอดแต่ละ${hasFam ? 'บ้าน' : 'คน'}\n`;
+  for (const u of units) {
+    const b = bal[u.key] || { paid: 0, net: 0 }; const net = Math.round(b.net * 100) / 100;
     const tag = net > 0.005 ? `ได้คืน ฿${fmtBaht(net)}` : (net < -0.005 ? `จ่ายเพิ่ม ฿${fmtBaht(-net)}` : 'ลงตัว');
-    s += `• ${m.name}: จ่าย ฿${fmtBaht(b.paid)} (${tag})\n`;
+    const isFam = u.members.length > 1 || u.key.startsWith('f:');
+    const nm = isFam ? `${u.name} (${u.members.map((m) => m.name).join(',')})` : u.name;
+    s += `• ${nm}: จ่าย ฿${fmtBaht(b.paid)} (${tag})\n`;
   }
   s += `\n🔁 ใครโอนให้ใคร\n`;
   if (!tx.length) s += `ทุกคนเคลียร์กันแล้ว 🎉\n`;
-  else for (const t of tx) s += `• ${memberName(tp, t.from)} → ${memberName(tp, t.to)}: ฿${fmtBaht(t.amount)}\n`;
+  else for (const t of tx) s += `• ${unitNameByKey(units, t.from)} → ${unitNameByKey(units, t.to)}: ฿${fmtBaht(t.amount)}\n`;
   s += `\n📲 เปิดแอป: ${link}`;
   return s;
 }

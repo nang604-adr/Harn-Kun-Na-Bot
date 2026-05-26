@@ -385,39 +385,77 @@ function fmtCur(amount, code){
 function expCur(e){ return e.cur || 'THB'; }
 function expTHB(e){ return (Number(e.amount)||0) * (e.rate || 1); }   // ยอดเป็นบาท (เรทล็อกไว้ตอนบันทึก)
 
-/* คำนวณยอดของแต่ละคน (เป็นบาทเสมอ):
-   paid = จ่ายออกไปทั้งหมด, owed = ส่วนที่ต้องรับผิดชอบ, net = paid - owed */
+/* ---------- บ้าน/ครอบครัว (unit) ---------- */
+// key ของหน่วย: ถ้ามีชื่อบ้าน = 'f:'+ชื่อบ้าน, ถ้าไม่มี = 'm:'+id (เดี่ยว)
+function memberUnitKey(m){ const f=(m.family||'').trim(); return f ? 'f:'+f : 'm:'+m.id; }
+function tripUnits(tp){
+  const order=[], map={};
+  for(const m of (tp.members||[])){
+    const k=memberUnitKey(m);
+    if(!map[k]){ map[k]={ key:k, name:(m.family||'').trim()||m.name, members:[], promptpay:'' }; order.push(k); }
+    map[k].members.push(m);
+    if(!map[k].promptpay && m.promptpay) map[k].promptpay=m.promptpay;   // ตัวแทน = คนแรกที่มี PromptPay
+  }
+  return order.map(k=>map[k]);
+}
+function unitExists(tp, key){ return (tp.members||[]).some(m=>memberUnitKey(m)===key); }
+
+/* ส่วนที่แต่ละคนต้องหารของรายการเดียว (คืน map memberId->บาท) รองรับหารรายคน/รายบ้าน */
+function expShares(tp, e){
+  const cents = Math.round(expTHB(e)*100);
+  const map={};
+  if(e.splitBy==='family'){
+    const fams=(e.splitFams||[]).filter(k=>unitExists(tp,k));
+    if(!fams.length) return {};
+    const fp=splitCents(cents, fams.length);             // แบ่งต่อบ้านเท่ากัน
+    fams.forEach((fk,i)=>{
+      const fm=(tp.members||[]).filter(m=>memberUnitKey(m)===fk);
+      if(!fm.length) return;
+      const mp=splitCents(fp[i], fm.length);             // แล้วกระจายในบ้านเพื่อให้ยอดตรง
+      fm.forEach((m,j)=> map[m.id]=(map[m.id]||0)+mp[j]/100);
+    });
+  }else{
+    const sp=(e.splitIds||[]).filter(id=>memberById(tp,id));
+    if(!sp.length) return {};
+    const parts=splitCents(cents, sp.length);
+    sp.forEach((id,i)=> map[id]=parts[i]/100);
+  }
+  return map;
+}
+
+/* คำนวณยอดรายคน (เป็นบาทเสมอ) */
 function computeBalances(tp){
   const bal = {};
   tp.members.forEach(m => bal[m.id] = { paid:0, owed:0, net:0 });
   let totalCents = 0;
   for(const e of tp.expenses){
-    const cents = Math.round(expTHB(e)*100);     // แปลงเป็นบาทก่อนคำนวณ
+    const cents = Math.round(expTHB(e)*100);
     totalCents += cents;
-    // ผู้จ่าย
     if(bal[e.payerId]) bal[e.payerId].paid += cents;
-    // คนที่หาร (กรองเฉพาะที่ยังเป็นสมาชิกอยู่)
-    const sp = (e.splitIds||[]).filter(id=>bal[id]);
-    if(sp.length===0) continue;
-    const parts = splitCents(cents, sp.length);
-    sp.forEach((id,i)=> bal[id].owed += parts[i]);
+    const sh = expShares(tp,e);
+    for(const id in sh){ if(bal[id]) bal[id].owed += Math.round(sh[id]*100); }
   }
-  // แปลงกลับเป็นบาท
-  Object.values(bal).forEach(b=>{
-    b.paid/=100; b.owed/=100; b.net = b.paid - b.owed;
-  });
+  Object.values(bal).forEach(b=>{ b.paid/=100; b.owed/=100; b.net = b.paid - b.owed; });
   return { bal, total: totalCents/100 };
 }
 
-/* ส่วนที่แต่ละคนต้องหารของรายการเดียว (คืน map id->บาท, ตรงกับ computeBalances) */
-function expShares(tp, e){
-  const map={};
-  const sp=(e.splitIds||[]).filter(id=>memberById(tp,id));
-  if(sp.length){
-    const parts=splitCents(Math.round(expTHB(e)*100), sp.length);
-    sp.forEach((id,i)=> map[id]=parts[i]/100);
+/* รวมยอดรายคน -> รายบ้าน (unit) */
+function familyBalances(tp){
+  const { bal:mbal, total } = computeBalances(tp);
+  const units = tripUnits(tp);
+  const ubal = {}; units.forEach(u=> ubal[u.key]={ paid:0, owed:0, net:0 });
+  for(const m of (tp.members||[])){
+    const k=memberUnitKey(m); const b=mbal[m.id];
+    if(b && ubal[k]){ ubal[k].paid+=b.paid; ubal[k].owed+=b.owed; }
   }
-  return map;
+  Object.values(ubal).forEach(b=>{ b.net=Math.round((b.paid-b.owed)*100)/100; });
+  return { bal:ubal, total, units, mbal };
+}
+/* ส่วนที่แต่ละบ้านต้องหารของรายการเดียว (map unitKey->บาท) */
+function expSharesUnit(tp, e){
+  const ms = expShares(tp,e); const out={};
+  for(const id in ms){ const m=memberById(tp,id); if(!m) continue; const k=memberUnitKey(m); out[k]=(out[k]||0)+ms[id]; }
+  return out;
 }
 
 /* สรุปการโอน แบบลดจำนวนครั้งให้น้อยที่สุด (greedy จับเจ้าหนี้-ลูกหนี้ก้อนใหญ่สุด) */
@@ -469,6 +507,20 @@ function effectiveBalances(tp){
     bal2[id] = { paid: bal[id].paid, net: net, owed: bal[id].paid - net };
   }
   return { bal: bal2, total, mode, exact: bal };
+}
+/* ปัดยอด (ต่อ key) เป็นบาทเต็ม แบบเกลี่ยผลรวม 0 */
+function roundBalancesToBaht(bal){
+  const nets={}; for(const k in bal) nets[k]=bal[k].net;
+  const r=roundNetsToBaht(nets); const out={};
+  for(const k in bal) out[k]={ paid:bal[k].paid, net:r[k], owed:bal[k].paid-r[k] };
+  return out;
+}
+/* ยอดระดับบ้าน (unit) + ปัดเศษตามโหมด — ใช้กับ การ์ดสรุป/การโอน/QR */
+function effectiveUnitBalances(tp){
+  const { bal, total, units, mbal } = familyBalances(tp);
+  const mode = state.roundMode || 'baht';
+  const eff = mode==='baht' ? roundBalancesToBaht(bal) : bal;
+  return { bal: eff, exact: bal, total, units, mode, mbal };
 }
 function setRoundMode(m){ mutate({type:'setRoundMode', mode:m}); }
 
@@ -628,26 +680,32 @@ function renderMembersTab(tp){
     for(const m of tp.members){
       const cnt = tp.expenses.filter(e=>e.payerId===m.id).length;
       const pp = m.promptpay
-        ? `<span style="color:var(--green-dark)">📱 PromptPay: ${esc(m.promptpay)}</span>`
-        : `<span style="color:var(--amber)">ยังไม่ได้ใส่ PromptPay</span>`;
+        ? `<span style="color:var(--green-dark)">📱 ${esc(m.promptpay)}</span>`
+        : `<span style="color:var(--amber)">ยังไม่ใส่ PromptPay</span>`;
+      const fam = (m.family||'').trim() ? `<span style="color:var(--blue)">🏠 ${esc(m.family.trim())}</span> · ` : '';
       html += `<div class="bal-row">
         ${avatar(m)}
-        <div class="bal-name">${esc(m.name)}<div class="bal-sub">จ่ายไป ${cnt} รายการ · ${pp}</div></div>
+        <div class="bal-name">${esc(m.name)}<div class="bal-sub">${fam}จ่ายไป ${cnt} รายการ · ${pp}</div></div>
         <button class="btn btn-ghost btn-sm" onclick="openMemberForm('${m.id}')">แก้ไข</button>
         <button class="btn btn-danger btn-sm" onclick="removeMember('${m.id}')">ลบ</button>
       </div>`;
     }
   }
-  html += `</div><div class="hint" style="padding:0 4px">ใส่เบอร์ PromptPay (หรือเลขบัตรประชาชน) ของแต่ละคน เพื่อให้ระบบสร้าง QR โอนเงินให้อัตโนมัติในหน้าสรุป</div>`;
+  html += `</div><div class="hint" style="padding:0 4px">ใส่ <strong>บ้าน/ครอบครัว</strong> (คู่/ครอบครัวเดียวกันใส่ชื่อบ้านเดียวกัน) เพื่อให้สรุป/โอนรวมเป็นบ้าน · ใส่เบอร์ PromptPay ของหัวหน้าบ้านเพื่อสร้าง QR</div>`;
   return html;
 }
 
+function unitAvatar(u){ const ini=(u.name||'?').trim().slice(0,2).toUpperCase(); return `<span class="avatar" style="background:${colorFor(u.key)}">${esc(ini)}</span>`; }
+function unitByKey(units, key){ return units.find(u=>u.key===key); }
+
 function renderSummaryTab(tp){
-  const { bal, total, mode, exact } = effectiveBalances(tp);
+  const { bal, total, mode, exact, units } = effectiveUnitBalances(tp);
   if(total===0){
     return `<div class="empty"><div class="em">📊</div><div class="et">ยังไม่มีข้อมูลสรุป</div><div class="es">เพิ่มค่าใช้จ่ายก่อน แล้วกลับมาดูสรุปยอด</div></div>`;
   }
-  let html = `<div class="total-banner"><div class="lbl">ยอดรวมทั้งทริป</div><div class="val">฿${fmt(total)}</div><div class="meta">${tp.members.length} คน · ${tp.expenses.length} รายการ</div></div>`;
+  const hasFam = units.length < tp.members.length;
+  const metaCount = hasFam ? `${units.length} บ้าน (${tp.members.length} คน)` : `${tp.members.length} คน`;
+  let html = `<div class="total-banner"><div class="lbl">ยอดรวมทั้งทริป</div><div class="val">฿${fmt(total)}</div><div class="meta">${metaCount} · ${tp.expenses.length} รายการ</div></div>`;
 
   // สลับโหมดปัดเศษ
   html += `<div class="seg" style="margin-bottom:14px">
@@ -655,35 +713,39 @@ function renderSummaryTab(tp){
     <button class="pick ${mode==='satang'?'sel':''}" onclick="setRoundMode('satang')">แบบมีสตางค์</button>
   </div>`;
 
-  // ยอดแต่ละคน
-  html += `<div class="section-title">ยอดของแต่ละคน</div><div class="card">`;
-  for(const m of tp.members){
-    const b = bal[m.id]; const net = Math.round(b.net*100)/100;
+  // ยอดแต่ละบ้าน/คน
+  html += `<div class="section-title">ยอดของแต่ละ${hasFam?'บ้าน':'คน'}</div><div class="card">`;
+  for(const u of units){
+    const b = bal[u.key]; const net = Math.round(b.net*100)/100;
     const cls = net>0.005?'pos':(net<-0.005?'neg':'zero');
     const txt = net>0.005?`ควรได้คืน ฿${fmt(net)}`:(net<-0.005?`ต้องจ่ายเพิ่ม ฿${fmt(-net)}`:'ลงตัวพอดี');
+    const isFam = u.members.length>1 || u.key.startsWith('f:');
+    const subName = isFam ? `🏠 ${esc(u.members.map(m=>m.name).join(', '))}<br>` : '';
     html += `<div class="bal-row">
-      ${avatar(m)}
-      <div class="bal-name">${esc(m.name)}<div class="bal-sub">จ่ายจริง ฿${fmt(b.paid)} · ส่วนที่ต้องจ่าย ฿${fmt(b.owed)}</div></div>
+      ${unitAvatar(u)}
+      <div class="bal-name">${esc(u.name)}<div class="bal-sub">${subName}จ่ายจริง ฿${fmt(b.paid)} · ส่วนที่ต้องจ่าย ฿${fmt(b.owed)}</div></div>
       <div class="bal-amt ${cls}">${txt}</div>
     </div>`;
   }
   html += `</div>`;
   if(mode==='baht') html += `<div class="hint" style="padding:0 4px 6px">ปัดยอดโอนเป็นจำนวนเต็มบาทเพื่อความสะดวก (เกลี่ยให้ยอดรวมตรงพอดี) · ดูยอดละเอียดมีสตางค์ได้ในตารางด้านล่าง</div>`;
 
-  // ตารางรายละเอียดแบบ Excel (ใครจ่าย / หารใคร)
+  // ตารางรายละเอียดแบบ Excel (ใครจ่าย / หารใคร) — คอลัมน์ = บ้าน/คน
   html += `<div class="section-title">ตารางรายละเอียด (เช็คทีละรายการ)</div>`;
   html += `<div class="xtable-wrap"><table class="xtable"><thead><tr><th class="lbl">รายการ</th><th>ยอด</th>`;
-  for(const m of tp.members) html += `<th>${esc(m.name)}</th>`;
+  for(const u of units) html += `<th>${esc(u.name)}</th>`;
   html += `</tr></thead><tbody>`;
   for(const e of tp.expenses){
-    const shares = expShares(tp,e);
+    const ush = expSharesUnit(tp,e);
     const payer = memberById(tp,e.payerId);
+    const payerKey = payer ? memberUnitKey(payer) : null;
     const curNote = expCur(e)!=='THB' ? ` · ${curSym(expCur(e))}${fmtCur(e.amount,expCur(e))}` : '';
-    html += `<tr><td class="lbl"><div class="desc-main">${e.emoji||'🧾'} ${esc(e.desc||'ค่าใช้จ่าย')}</div><div class="desc-sub">จ่ายโดย ${payer?esc(payer.name):'?'}${e.date?' · '+fmtDate(e.date):''}${curNote}</div></td>`;
+    const splitNote = e.splitBy==='family' ? ' · หารรายบ้าน' : '';
+    html += `<tr><td class="lbl"><div class="desc-main">${e.emoji||'🧾'} ${esc(e.desc||'ค่าใช้จ่าย')}</div><div class="desc-sub">จ่ายโดย ${payer?esc(payer.name):'?'}${e.date?' · '+fmtDate(e.date):''}${curNote}${splitNote}</div></td>`;
     html += `<td>฿${fmt(expTHB(e))}</td>`;
-    for(const m of tp.members){
-      const isPayer = e.payerId===m.id;
-      const sh = shares[m.id];
+    for(const u of units){
+      const isPayer = u.key===payerKey;
+      const sh = ush[u.key];
       const cls = isPayer?'payer-cell':'';
       if(sh!=null) html += `<td class="${cls}">฿${fmt(sh)}${isPayer?' 💳':''}</td>`;
       else html += `<td class="${cls} muted">${isPayer?'💳':'–'}</td>`;
@@ -692,17 +754,17 @@ function renderSummaryTab(tp){
   }
   html += `</tbody><tfoot>`;
   html += `<tr><td class="lbl">รวมที่ต้องหาร</td><td>฿${fmt(total)}</td>`;
-  for(const m of tp.members) html += `<td>฿${fmt(exact[m.id].owed)}</td>`;
+  for(const u of units) html += `<td>฿${fmt(exact[u.key].owed)}</td>`;
   html += `</tr>`;
   html += `<tr><td class="lbl">จ่ายจริง</td><td class="muted">–</td>`;
-  for(const m of tp.members) html += `<td>฿${fmt(exact[m.id].paid)}</td>`;
+  for(const u of units) html += `<td>฿${fmt(exact[u.key].paid)}</td>`;
   html += `</tr>`;
   html += `<tr><td class="lbl">สุทธิ</td><td class="muted">–</td>`;
-  for(const m of tp.members){ const net=Math.round(exact[m.id].net*100)/100; const c=net>0.005?'pos':(net<-0.005?'neg':'muted'); html += `<td class="${c}">${net>0.005?'+':''}${fmt(net)}</td>`; }
+  for(const u of units){ const net=Math.round(exact[u.key].net*100)/100; const c=net>0.005?'pos':(net<-0.005?'neg':'muted'); html += `<td class="${c}">${net>0.005?'+':''}${fmt(net)}</td>`; }
   html += `</tr></tfoot></table></div>`;
-  html += `<div class="hint" style="padding:6px 4px">ตารางนี้เป็น<strong>ยอดจริงละเอียด (มีสตางค์)</strong> ไว้เช็คทีละรายการ · 💳 = คนที่ออกเงินรายการนั้น · เลื่อนซ้าย–ขวาเพื่อดูครบทุกคน</div>`;
+  html += `<div class="hint" style="padding:6px 4px">ตารางนี้เป็น<strong>ยอดจริงละเอียด (มีสตางค์)</strong> ไว้เช็คทีละรายการ · 💳 = ${hasFam?'บ้าน':'คน'}ที่ออกเงินรายการนั้น · เลื่อนซ้าย–ขวาเพื่อดูครบ</div>`;
 
-  // การโอน
+  // การโอน (ระดับบ้าน)
   const tx = settle(bal);
   const st = tp.settle || {};
   const paidCount = tx.filter(t=> st[t.from+'->'+t.to] && st[t.from+'->'+t.to].paid).length;
@@ -715,7 +777,7 @@ function renderSummaryTab(tp){
     }
     html += `<div class="card">`;
     tx.forEach((t)=>{
-      const from = memberById(tp,t.from), to = memberById(tp,t.to);
+      const from = unitByKey(units,t.from), to = unitByKey(units,t.to);
       const rec = st[t.from+'->'+t.to] || {};
       const isPaid = !!rec.paid;
       const hasSlip = !!rec.slip;
@@ -723,8 +785,8 @@ function renderSummaryTab(tp){
       let actions='';
       if(!isPaid){
         actions += to && to.promptpay
-          ? `<button class="btn btn-light btn-sm" onclick="showQR('${to.id}',${t.amount})">📲 QR โอน</button>`
-          : `<button class="btn btn-ghost btn-sm" onclick="openMemberForm('${to?.id}')">＋ ใส่ PromptPay</button>`;
+          ? `<button class="btn btn-light btn-sm" onclick="showQR('${t.to}',${t.amount})">📲 QR โอน</button>`
+          : `<button class="btn btn-ghost btn-sm" onclick="openMemberForm('${to&&to.members[0]?to.members[0].id:''}')">＋ ใส่ PromptPay</button>`;
       }
       actions += hasSlip
         ? `<button class="btn btn-ghost btn-sm" onclick="viewSlip('${t.from}','${t.to}')">🧾 ดูสลิป</button>`
@@ -734,10 +796,10 @@ function renderSummaryTab(tp){
         : `<button class="btn btn-outline btn-sm" onclick="togglePaid('${t.from}','${t.to}',${t.amount})">○ กดเมื่อจ่ายแล้ว</button>`;
       html += `<div class="settle ${isPaid?'paid':''}">
         <div class="settle-main">
-          ${avatar(from)}
+          ${from?unitAvatar(from):''}
           <span class="who">${esc(from?.name||'?')}</span>
           <span class="arrow">→</span>
-          ${avatar(to)}
+          ${to?unitAvatar(to):''}
           <span class="who">${esc(to?.name||'?')}</span>
           <span class="amt">฿${fmt(t.amount)}${isPaid?'<span class="paid-badge">✓ จ่ายแล้ว</span>':''}</span>
         </div>
@@ -842,9 +904,13 @@ function openMemberForm(id){
   openSheet(editing?'แก้ไขสมาชิก':'เพิ่มสมาชิก', `
     <label class="fl">ชื่อ</label>
     <input class="inp" id="m_name" placeholder="ชื่อสมาชิก" value="${editing?esc(editing.name):''}">
+    <label class="fl">บ้าน/ครอบครัว (ไม่ใส่ = เดี่ยว)</label>
+    <input class="inp" id="m_family" list="m_familylist" placeholder="เช่น บ้านเนง (คู่/ครอบครัวเดียวกันใส่ชื่อเดียวกัน)" value="${editing?esc(editing.family||''):''}">
+    <datalist id="m_familylist">${[...new Set((tp.members||[]).map(m=>(m.family||'').trim()).filter(Boolean))].map(f=>`<option value="${esc(f)}"></option>`).join('')}</datalist>
+    <div class="hint">ใครใส่ชื่อบ้านเดียวกัน = อยู่บ้านเดียวกัน เวลาสรุป/โอนจะรวมเป็นบ้านเดียว</div>
     <label class="fl">เบอร์ PromptPay หรือ เลขบัตรประชาชน (ไม่ใส่ก็ได้)</label>
     <input class="inp" id="m_pp" inputmode="numeric" placeholder="เช่น 0812345678" value="${editing?esc(editing.promptpay||''):''}">
-    <div class="hint">ใส่ไว้เพื่อให้คนอื่นสแกน QR โอนเงินคืนให้คุณได้ทันทีในหน้าสรุป</div>
+    <div class="hint">ใส่ไว้เพื่อให้คนอื่นสแกน QR โอนเงินคืนให้ได้ทันที (บ้านเดียวกันใส่ของหัวหน้าบ้านพอ)</div>
     <hr class="div">
     <button class="btn btn-primary" onclick="saveMember('${editing?editing.id:''}')">${editing?'บันทึก':'เพิ่มสมาชิก'}</button>
   `);
@@ -853,30 +919,34 @@ function saveMember(id){
   const tp=trip();
   const name=$("#m_name").value.trim();
   const ppRaw=$("#m_pp").value.trim();
+  const family=($("#m_family").value||'').trim();
   if(!name){ toast("ใส่ชื่อก่อนนะ"); return; }
   if(ppRaw && !validPromptpay(ppRaw)){ toast("เบอร์/เลขบัตรไม่ถูกต้อง (10, 13 หรือ 15 หลัก)"); return; }
   closeSheet();
   if(id){
-    mutate({type:'updateMember', tripId:tp.id, member:{id, name, promptpay:ppRaw}});
+    mutate({type:'updateMember', tripId:tp.id, member:{id, name, promptpay:ppRaw, family}});
     toast("บันทึกแล้ว");
   }else{
-    mutate({type:'addMember', tripId:tp.id, member:{id:uid(), name, promptpay:ppRaw}});
+    mutate({type:'addMember', tripId:tp.id, member:{id:uid(), name, promptpay:ppRaw, family}});
     toast("เพิ่มสมาชิกแล้ว");
   }
 }
-/* ----- แสดง QR PromptPay สำหรับการโอน ----- */
-function showQR(memberId, amount){
+/* ----- แสดง QR PromptPay สำหรับการโอน (ระดับบ้าน) ----- */
+function showQR(unitKey, amount){
   const tp=trip();
-  const m=memberById(tp,memberId);
-  if(!m || !m.promptpay){ openMemberForm(memberId); return; }
-  const payload=promptpayPayload(m.promptpay, amount);
-  openSheet('สแกนเพื่อโอนให้ '+m.name, `
+  const u=tripUnits(tp).find(x=>x.key===unitKey);
+  if(!u){ return; }
+  if(!u.promptpay){ if(u.members[0]) openMemberForm(u.members[0].id); return; }
+  const isFam = u.members.length>1 || u.key.startsWith('f:');
+  const payload=promptpayPayload(u.promptpay, amount);
+  openSheet('สแกนเพื่อโอนให้ '+u.name, `
     <div style="text-align:center">
       <div style="font-size:13px;color:var(--muted)">โอนให้</div>
-      <div style="font-weight:700;font-size:18px;margin:2px 0">${avatar(m)} ${esc(m.name)}</div>
+      <div style="font-weight:700;font-size:18px;margin:2px 0">${unitAvatar(u)} ${esc(u.name)}</div>
+      ${isFam?`<div style="font-size:12px;color:var(--muted)">🏠 ${esc(u.members.map(m=>m.name).join(', '))}</div>`:''}
       <div style="font-size:30px;font-weight:700;color:var(--green-dark);margin:6px 0">฿${fmt(amount)}</div>
       <div id="qrbox" style="display:inline-block;background:#fff;padding:14px;border-radius:16px;box-shadow:var(--shadow);margin:8px 0"></div>
-      <div style="font-size:12px;color:var(--muted)">PromptPay: ${esc(m.promptpay)}</div>
+      <div style="font-size:12px;color:var(--muted)">PromptPay: ${esc(u.promptpay)}</div>
       <div class="hint" style="margin-top:10px">เปิดแอปธนาคาร เลือก "สแกน" แล้วสแกน QR นี้ · ยอดเงินถูกระบุไว้ให้แล้ว</div>
     </div>
   `);
@@ -962,6 +1032,8 @@ let formPayer = null;
 let formEmoji = "🧾";
 let formPhoto = null;        // dataURL ของรูปใบเสร็จ
 let formCur = 'THB';         // สกุลเงินของรายการที่กำลังกรอก
+let formSplitMode = 'person';// person | family
+let formFams = new Set();    // unit keys ที่เลือก (โหมดหารรายบ้าน)
 
 function openExpenseForm(id){
   const tp = trip();
@@ -972,6 +1044,10 @@ function openExpenseForm(id){
   formCur = editing ? (editing.cur||'THB') : (tp.fx ? tp.fx.cur : 'THB');
   formPayer = editing?.payerId || tp.members[0].id;
   formSplit = new Set(editing ? (editing.splitIds||[]).filter(x=>memberById(tp,x)) : tp.members.map(m=>m.id));
+  const units0 = tripUnits(tp);
+  const hasFam0 = units0.length < tp.members.length;
+  formSplitMode = (editing && editing.splitBy==='family') ? 'family' : 'person';
+  formFams = new Set(editing && editing.splitBy==='family' ? (editing.splitFams||[]).filter(k=>units0.some(u=>u.key===k)) : units0.map(u=>u.key));
 
   const today = new Date().toISOString().slice(0,10);
   openSheet(editing?'แก้ไขค่าใช้จ่าย':'เพิ่มค่าใช้จ่าย', `
@@ -992,14 +1068,15 @@ function openExpenseForm(id){
     <div class="split-head">
       <label class="fl">หารกับใครบ้าง</label>
       <div>
-        <button class="link-btn" onclick="selectAllSplit(true)">เลือกทุกคน</button> ·
+        <button class="link-btn" onclick="selectAllSplit(true)">เลือกทั้งหมด</button> ·
         <button class="link-btn" onclick="selectAllSplit(false)">ล้าง</button>
       </div>
     </div>
-    <div class="picker" id="f_split">
-      ${tp.members.map(m=>`<button type="button" class="pick ${formSplit.has(m.id)?'sel':''}" data-id="${m.id}" onclick="toggleSplit('${m.id}')">
-        <span class="av" style="background:${colorFor(m.id)}">${esc(initials(m.name))}</span>${esc(m.name)} <span class="check">${formSplit.has(m.id)?'✓':''}</span></button>`).join('')}
-    </div>
+    ${hasFam0 ? `<div class="seg" id="f_splitmode" style="margin-bottom:8px">
+      <button type="button" class="pick ${formSplitMode==='person'?'sel':''}" data-mode="person" onclick="setSplitMode('person')">หารรายคน</button>
+      <button type="button" class="pick ${formSplitMode==='family'?'sel':''}" data-mode="family" onclick="setSplitMode('family')">หารรายบ้าน</button>
+    </div>` : ''}
+    <div id="f_splitarea"></div>
     <div class="split-summary-line" id="f_splitinfo"></div>
     <label class="fl">รูปใบเสร็จ / บิล (ไม่ใส่ก็ได้)</label>
     <div id="f_photoarea"></div>
@@ -1012,7 +1089,7 @@ function openExpenseForm(id){
   `);
   $("#f_amount").addEventListener('input', updateSplitInfo);
   renderPhotoArea();
-  updateSplitInfo();
+  renderSplitArea();
 }
 /* แสดงพื้นที่รูปในฟอร์ม (ปุ่มแนบ หรือ preview) */
 function renderPhotoArea(){
@@ -1076,17 +1153,41 @@ function pickPayer(id){
   formPayer=id;
   $("#f_payer").querySelectorAll('.pick').forEach(p=>p.classList.toggle('sel', p.dataset.id===id));
 }
+function renderSplitArea(){
+  const tp=trip(); const el=$("#f_splitarea"); if(!el) return;
+  if(formSplitMode==='family'){
+    const units=tripUnits(tp);
+    el.innerHTML = `<div class="picker">${units.map(u=>{
+      const on=formFams.has(u.key);
+      const isFam=u.members.length>1||u.key.startsWith('f:');
+      const sub=isFam?` (${esc(u.members.map(m=>m.name).join(','))})`:'';
+      return `<button type="button" class="pick ${on?'sel':''}" data-key="${u.key}" onclick="toggleFam('${u.key}')">${isFam?'🏠 ':''}${esc(u.name)}${sub} <span class="check">${on?'✓':''}</span></button>`;
+    }).join('')}</div>`;
+  }else{
+    el.innerHTML = `<div class="picker" id="f_split">${tp.members.map(m=>`<button type="button" class="pick ${formSplit.has(m.id)?'sel':''}" data-id="${m.id}" onclick="toggleSplit('${m.id}')"><span class="av" style="background:${colorFor(m.id)}">${esc(initials(m.name))}</span>${esc(m.name)} <span class="check">${formSplit.has(m.id)?'✓':''}</span></button>`).join('')}</div>`;
+  }
+  updateSplitInfo();
+}
+function setSplitMode(mode){
+  formSplitMode=mode;
+  const seg=$("#f_splitmode"); if(seg) seg.querySelectorAll('.pick').forEach(b=>b.classList.toggle('sel', b.dataset.mode===mode));
+  renderSplitArea();
+}
+function toggleFam(key){
+  if(formFams.has(key)) formFams.delete(key); else formFams.add(key);
+  renderSplitArea();
+}
 function toggleSplit(id){
   if(formSplit.has(id)) formSplit.delete(id); else formSplit.add(id);
   refreshSplitUI();
 }
 function selectAllSplit(all){
   const tp=trip();
-  formSplit = new Set(all? tp.members.map(m=>m.id):[]);
-  refreshSplitUI();
+  if(formSplitMode==='family'){ formFams = new Set(all? tripUnits(tp).map(u=>u.key):[]); renderSplitArea(); }
+  else { formSplit = new Set(all? tp.members.map(m=>m.id):[]); refreshSplitUI(); }
 }
 function refreshSplitUI(){
-  $("#f_split").querySelectorAll('.pick').forEach(p=>{
+  const sp=$("#f_split"); if(sp) sp.querySelectorAll('.pick').forEach(p=>{
     const on = formSplit.has(p.dataset.id);
     p.classList.toggle('sel', on);
     const chk = p.querySelector('.check'); if(chk) chk.textContent = on?'✓':'';
@@ -1110,8 +1211,9 @@ function updateSplitInfo(){
     }else hint.textContent='';
   }
   const el=$("#f_splitinfo"); if(!el) return;
-  const n = formSplit.size;
-  if(n===0){ el.textContent="เลือกอย่างน้อย 1 คนที่ต้องหาร"; el.style.color="var(--red)"; return; }
+  const unitWord = formSplitMode==='family' ? 'บ้าน' : 'คน';
+  const n = formSplitMode==='family' ? formFams.size : formSplit.size;
+  if(n===0){ el.textContent=`เลือกอย่างน้อย 1 ${unitWord}ที่ต้องหาร`; el.style.color="var(--red)"; return; }
   el.style.color="var(--muted)";
   if(amt>0){
     const cents = Math.round(amt*100);
@@ -1119,9 +1221,9 @@ function updateSplitInfo(){
     const sym=curSym(formCur);
     const min=parts[parts.length-1]/100, max=parts[0]/100;
     const per = (min===max)? `${sym}${fmtCur(max,formCur)}` : `${sym}${fmtCur(max,formCur)}–${fmtCur(min,formCur)}`;
-    el.textContent = `หาร ${n} คน → คนละ ${per}`;
+    el.textContent = `หาร ${n} ${unitWord} → ${unitWord}ละ ${per}`;
   }else{
-    el.textContent = `หาร ${n} คน`;
+    el.textContent = `หาร ${n} ${unitWord}`;
   }
 }
 function saveExpense(id){
@@ -1130,15 +1232,20 @@ function saveExpense(id){
   const amount=parseFloat($("#f_amount").value);
   const date=$("#f_date").value;
   if(!amount || amount<=0){ toast("ใส่จำนวนเงินก่อนนะ"); return; }
-  if(formSplit.size===0){ toast("เลือกคนที่ต้องหารอย่างน้อย 1 คน"); return; }
-  const splitIds=[...formSplit];
+  if(formSplitMode==='family'){
+    if(formFams.size===0){ toast("เลือกบ้านที่ต้องหารอย่างน้อย 1 บ้าน"); return; }
+  }else{
+    if(formSplit.size===0){ toast("เลือกคนที่ต้องหารอย่างน้อย 1 คน"); return; }
+  }
   // กำหนดสกุลเงิน + เรท (ล็อกเรทติดรายการ)
   let cur, rate;
   if(tp.fx && formCur===tp.fx.cur){ cur=tp.fx.cur; rate=tp.fx.rate||1; }
   else if(formCur!=='THB' && id){ const old=tp.expenses.find(x=>x.id===id); cur=formCur; rate=(old&&old.rate)||1; }
   else { cur='THB'; rate=1; }
   closeSheet();
-  const exp = Object.assign(id?{id}:{id:uid()}, {desc,amount,payerId:formPayer,splitIds,date,emoji:formEmoji,photo:formPhoto,cur,rate});
+  const exp = Object.assign(id?{id}:{id:uid()}, {desc,amount,payerId:formPayer,date,emoji:formEmoji,photo:formPhoto,cur,rate});
+  if(formSplitMode==='family'){ exp.splitBy='family'; exp.splitFams=[...formFams]; exp.splitIds=[]; }
+  else { exp.splitBy='person'; exp.splitIds=[...formSplit]; exp.splitFams=[]; }
   if(id){
     mutate({type:'updateExpense', tripId:tp.id, expense:exp});
     toast("บันทึกการแก้ไขแล้ว");
@@ -1225,48 +1332,54 @@ async function copyAgain(){
    ดาวน์โหลดสรุปเป็น PDF (ถ่ายภาพหน้าสรุป -> ประกอบเป็น PDF)
    ========================================================= */
 function buildPrintable(tp){
-  const {bal,total,exact}=effectiveBalances(tp);
+  const {bal,total,exact,units}=effectiveUnitBalances(tp);
   const tx=settle(bal); const st=tp.settle||{};
+  const hasFam = units.length < tp.members.length;
+  const metaCount = hasFam ? `${units.length} บ้าน (${tp.members.length} คน)` : `${tp.members.length} คน`;
   let now=''; try{ now=new Date().toLocaleString('th-TH',{dateStyle:'medium',timeStyle:'short'}); }catch(e){ now=new Date().toLocaleString(); }
   const wrap=document.createElement('div');
   wrap.style.cssText="position:absolute;left:-99999px;top:0;width:760px;background:#fff;color:#1d2b25;font-family:'Noto Sans Thai',sans-serif;padding:28px;box-sizing:border-box;";
   let h='<style>.hk{border-collapse:collapse}.hk td,.hk th{border:1px solid #cfd8d3}</style>';
   h+=`<div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #06C755;padding-bottom:12px;margin-bottom:16px">
     <div><div style="font-size:24px;font-weight:700">${tp.emoji||'🧳'} ${esc(tp.name)}</div>
-    <div style="font-size:13px;color:#7a8a83;margin-top:4px">สรุปค่าใช้จ่าย · ${tp.members.length} คน · ${tp.expenses.length} รายการ</div></div>
+    <div style="font-size:13px;color:#7a8a83;margin-top:4px">สรุปค่าใช้จ่าย · ${metaCount} · ${tp.expenses.length} รายการ</div></div>
     <div style="text-align:right"><div style="font-size:12px;color:#7a8a83">ยอดรวมทั้งหมด</div><div style="font-size:26px;font-weight:700;color:#04a847">฿${fmt(total)}</div></div></div>`;
-  // ยอดของแต่ละคน
-  h+=`<div style="font-size:15px;font-weight:700;margin:14px 0 8px">ยอดของแต่ละคน</div>`;
+  // ยอดของแต่ละบ้าน/คน
+  h+=`<div style="font-size:15px;font-weight:700;margin:14px 0 8px">ยอดของแต่ละ${hasFam?'บ้าน':'คน'}</div>`;
   h+=`<table class="hk" style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px">
-    <tr style="background:#e8f9ef;color:#04a847"><th style="text-align:left;padding:8px 10px">ชื่อ</th><th style="text-align:right;padding:8px 10px">จ่ายจริง</th><th style="text-align:right;padding:8px 10px">ต้องหาร</th><th style="text-align:right;padding:8px 10px">สุทธิ</th></tr>`;
-  for(const m of tp.members){
-    const b=bal[m.id]; const net=Math.round(b.net*100)/100;
+    <tr style="background:#e8f9ef;color:#04a847"><th style="text-align:left;padding:8px 10px">${hasFam?'บ้าน':'ชื่อ'}</th><th style="text-align:right;padding:8px 10px">จ่ายจริง</th><th style="text-align:right;padding:8px 10px">ต้องหาร</th><th style="text-align:right;padding:8px 10px">สุทธิ</th></tr>`;
+  for(const u of units){
+    const b=bal[u.key]; const net=Math.round(b.net*100)/100;
     const col=net>0.005?'#04a847':(net<-0.005?'#e5484d':'#7a8a83');
     const tag=net>0.005?`+${fmt(net)} (ได้คืน)`:(net<-0.005?`-${fmt(-net)} (จ่ายเพิ่ม)`:'ลงตัว');
-    h+=`<tr style="border-bottom:1px solid #e7ecea"><td style="padding:8px 10px;font-weight:600">${esc(m.name)}</td><td style="text-align:right;padding:8px 10px">฿${fmt(b.paid)}</td><td style="text-align:right;padding:8px 10px">฿${fmt(b.owed)}</td><td style="text-align:right;padding:8px 10px;font-weight:700;color:${col}">${tag}</td></tr>`;
+    const isFam=u.members.length>1||u.key.startsWith('f:');
+    const nm=isFam?`${esc(u.name)} <span style="color:#7a8a83;font-weight:400;font-size:11px">(${esc(u.members.map(m=>m.name).join(', '))})</span>`:esc(u.name);
+    h+=`<tr style="border-bottom:1px solid #e7ecea"><td style="padding:8px 10px;font-weight:600">${nm}</td><td style="text-align:right;padding:8px 10px">฿${fmt(b.paid)}</td><td style="text-align:right;padding:8px 10px">฿${fmt(b.owed)}</td><td style="text-align:right;padding:8px 10px;font-weight:700;color:${col}">${tag}</td></tr>`;
   }
   h+=`</table>`;
   // ตารางรายละเอียด
   h+=`<div style="font-size:15px;font-weight:700;margin:14px 0 8px">รายละเอียดแต่ละรายการ</div>`;
   h+=`<table class="hk" style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:18px">
     <tr style="background:#e8f9ef;color:#04a847"><th style="text-align:left;padding:7px 8px">รายการ</th><th style="text-align:right;padding:7px 8px">ยอด</th>`;
-  for(const m of tp.members) h+=`<th style="text-align:right;padding:7px 8px">${esc(m.name)}</th>`;
+  for(const u of units) h+=`<th style="text-align:right;padding:7px 8px">${esc(u.name)}</th>`;
   h+=`</tr>`;
   for(const e of tp.expenses){
-    const shares=expShares(tp,e); const payer=memberById(tp,e.payerId);
+    const ush=expSharesUnit(tp,e); const payer=memberById(tp,e.payerId);
+    const payerKey=payer?memberUnitKey(payer):null;
     const curNoteP = expCur(e)!=='THB' ? ` · ${curSym(expCur(e))}${fmtCur(e.amount,expCur(e))}` : '';
-    h+=`<tr style="border-bottom:1px solid #e7ecea"><td style="padding:7px 8px"><b>${esc(e.desc||'ค่าใช้จ่าย')}</b><br><span style="color:#7a8a83;font-size:10px">จ่ายโดย ${payer?esc(payer.name):'?'}${e.date?' · '+fmtDate(e.date):''}${curNoteP}</span></td><td style="text-align:right;padding:7px 8px">฿${fmt(expTHB(e))}</td>`;
-    for(const m of tp.members){
-      const isP=e.payerId===m.id; const sh=shares[m.id]; const bg=isP?'background:#eafaf0;':'';
+    const splitNoteP = e.splitBy==='family' ? ' · หารรายบ้าน' : '';
+    h+=`<tr style="border-bottom:1px solid #e7ecea"><td style="padding:7px 8px"><b>${esc(e.desc||'ค่าใช้จ่าย')}</b><br><span style="color:#7a8a83;font-size:10px">จ่ายโดย ${payer?esc(payer.name):'?'}${e.date?' · '+fmtDate(e.date):''}${curNoteP}${splitNoteP}</span></td><td style="text-align:right;padding:7px 8px">฿${fmt(expTHB(e))}</td>`;
+    for(const u of units){
+      const isP=u.key===payerKey; const sh=ush[u.key]; const bg=isP?'background:#eafaf0;':'';
       if(sh!=null) h+=`<td style="text-align:right;padding:7px 8px;${bg}">฿${fmt(sh)}${isP?' 💳':''}</td>`;
       else h+=`<td style="text-align:right;padding:7px 8px;color:#aab;${bg}">${isP?'💳':'–'}</td>`;
     }
     h+=`</tr>`;
   }
   h+=`<tr style="border-top:2px solid #06C755;font-weight:700;background:#f4f6f8"><td style="padding:7px 8px">รวมที่ต้องหาร</td><td style="text-align:right;padding:7px 8px">฿${fmt(total)}</td>`;
-  for(const m of tp.members) h+=`<td style="text-align:right;padding:7px 8px">฿${fmt(exact[m.id].owed)}</td>`;
+  for(const u of units) h+=`<td style="text-align:right;padding:7px 8px">฿${fmt(exact[u.key].owed)}</td>`;
   h+=`</tr><tr style="font-weight:700;background:#f4f6f8"><td style="padding:7px 8px">จ่ายจริง</td><td style="text-align:right;padding:7px 8px;color:#aab">–</td>`;
-  for(const m of tp.members) h+=`<td style="text-align:right;padding:7px 8px">฿${fmt(exact[m.id].paid)}</td>`;
+  for(const u of units) h+=`<td style="text-align:right;padding:7px 8px">฿${fmt(exact[u.key].paid)}</td>`;
   h+=`</tr></table>`;
   // การโอน
   h+=`<div style="font-size:15px;font-weight:700;margin:14px 0 8px">การโอน (น้อยครั้งที่สุด)</div>`;
@@ -1276,7 +1389,7 @@ function buildPrintable(tp){
     h+=`<table class="hk" style="width:100%;border-collapse:collapse;font-size:13px">`;
     for(const t of tx){
       const rec=st[t.from+'->'+t.to]; const paid=rec&&rec.paid;
-      h+=`<tr style="border-bottom:1px solid #e7ecea"><td style="padding:8px 10px">${esc(memberById(tp,t.from)?.name||'?')} → ${esc(memberById(tp,t.to)?.name||'?')}</td><td style="text-align:right;padding:8px 10px;font-weight:700">฿${fmt(t.amount)}</td><td style="text-align:right;padding:8px 10px;color:${paid?'#04a847':'#e5484d'};font-weight:600">${paid?'✓ จ่ายแล้ว':'ยังไม่จ่าย'}</td></tr>`;
+      h+=`<tr style="border-bottom:1px solid #e7ecea"><td style="padding:8px 10px">${esc(unitByKey(units,t.from)?.name||'?')} → ${esc(unitByKey(units,t.to)?.name||'?')}</td><td style="text-align:right;padding:8px 10px;font-weight:700">฿${fmt(t.amount)}</td><td style="text-align:right;padding:8px 10px;color:${paid?'#04a847':'#e5484d'};font-weight:600">${paid?'✓ จ่ายแล้ว':'ยังไม่จ่าย'}</td></tr>`;
     }
     const paidCount=tx.filter(t=>st[t.from+'->'+t.to]&&st[t.from+'->'+t.to].paid).length;
     h+=`</table><div style="font-size:12px;color:#7a8a83;margin-top:8px">เคลียร์แล้ว ${paidCount}/${tx.length} รายการ</div>`;
