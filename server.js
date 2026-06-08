@@ -124,6 +124,9 @@ function applyOp(d, op) {
     case 'setSettle': {
       const t = T(op.tripId); if (t) { t.settle = t.settle || {}; t.settle[op.key] = op.rec; } break;
     }
+    case 'setContact': {
+      d.directory = d.directory || {}; if (op.contact && op.contact.key) d.directory[op.contact.key] = op.contact; break;
+    }
     case 'setRoundMode':
       d.roundMode = op.mode; break;
     default:

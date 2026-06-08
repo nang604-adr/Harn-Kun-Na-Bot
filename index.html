@@ -346,12 +346,36 @@ function applyOpTo(d, op){
     case 'deleteExpense': { const t=T(op.tripId); if(t) t.expenses=(t.expenses||[]).filter(e=>e.id!==op.expenseId); break; }
     case 'setSettle': { const t=T(op.tripId); if(t){ t.settle=t.settle||{}; t.settle[op.key]=op.rec; } break; }
     case 'setRoundMode': d.roundMode=op.mode; break;
+    case 'setContact': { d.directory=d.directory||{}; if(op.contact&&op.contact.key) d.directory[op.contact.key]=op.contact; break; }
   }
   return d;
 }
 function sendOp(op){ if(socket && joined && socket.connected) socket.emit('op', op); else outbox.push(op); }
 /* แอ็กชันมาตรฐาน: ปรับ state -> ส่ง op -> แคช -> วาดใหม่ */
 function mutate(op){ applyOpTo(state, op); sendOp(op); cacheSave(); render(); }
+
+/* ---------- สมุดรายชื่อ: จำเบอร์ PromptPay / บ้าน ของแต่ละคน (ระดับกลุ่ม) ---------- */
+function contactKey(name){ return (name||'').trim().toLowerCase(); }
+function lookupContact(name){
+  const k=contactKey(name); if(!k) return null;
+  const dir=state.directory||{};
+  if(dir[k] && (dir[k].promptpay||dir[k].family)) return dir[k];
+  let found=null;
+  for(const t of (state.trips||[])) for(const m of (t.members||[]))
+    if(contactKey(m.name)===k && (m.promptpay||m.family)) found={name:m.name,promptpay:m.promptpay||'',family:m.family||''};
+  return found;
+}
+function rememberContact(name,promptpay,family){
+  const k=contactKey(name); if(!k || (!promptpay && !family)) return;
+  mutate({type:'setContact', contact:{key:k, name:(name||'').trim(), promptpay:promptpay||'', family:family||''}});
+}
+function prefillContact(){
+  const nameEl=$("#m_name"), ppEl=$("#m_pp"), famEl=$("#m_family");
+  const c=lookupContact(nameEl&&nameEl.value);
+  if(!c) return;
+  if(ppEl && !ppEl.value.trim() && c.promptpay) ppEl.value=c.promptpay;
+  if(famEl && !famEl.value.trim() && c.family) famEl.value=c.family;
+}
 
 /* ---------- ตั้งค่า WebSocket ---------- */
 function setupSocket(){
@@ -923,7 +947,7 @@ function saveTrip(id){
     return;
   }
   const rawNames = $("#f_members").value.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
-  const members = rawNames.map(nm=>({id:uid(),name:nm}));
+  const members = rawNames.map(nm=>{ const c=lookupContact(nm); const m={id:uid(),name:nm}; if(c){ if(c.promptpay) m.promptpay=c.promptpay; if(c.family) m.family=c.family; } return m; });
   const t = { id:uid(), name, emoji, members, expenses:[], createdAt:new Date().toISOString() };
   if(fx) t.fx = fx;
   state.currentTripId=t.id; view="trip"; tab=members.length?"exp":"members";
@@ -945,7 +969,7 @@ function openMemberForm(id){
   const editing = id ? memberById(tp,id) : null;
   openSheet(editing?'แก้ไขสมาชิก':'เพิ่มสมาชิก', `
     <label class="fl">ชื่อ</label>
-    <input class="inp" id="m_name" placeholder="ชื่อสมาชิก" value="${editing?esc(editing.name):''}">
+    <input class="inp" id="m_name" placeholder="ชื่อสมาชิก" value="${editing?esc(editing.name):''}" ${editing?'':'onchange="prefillContact()"'}>
     <label class="fl">บ้าน/ครอบครัว (ไม่ใส่ = เดี่ยว)</label>
     <input class="inp" id="m_family" list="m_familylist" placeholder="เช่น บ้านเนง (คู่/ครอบครัวเดียวกันใส่ชื่อเดียวกัน)" value="${editing?esc(editing.family||''):''}">
     <datalist id="m_familylist">${[...new Set((tp.members||[]).map(m=>(m.family||'').trim()).filter(Boolean))].map(f=>`<option value="${esc(f)}"></option>`).join('')}</datalist>
@@ -972,6 +996,7 @@ function saveMember(id){
     mutate({type:'addMember', tripId:tp.id, member:{id:uid(), name, promptpay:ppRaw, family}});
     toast("เพิ่มสมาชิกแล้ว");
   }
+  rememberContact(name, ppRaw, family);
 }
 /* ----- แสดง QR PromptPay สำหรับการโอน (ระดับบ้าน) ----- */
 function showQR(unitKey, amount){
