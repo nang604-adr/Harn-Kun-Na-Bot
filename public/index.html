@@ -155,6 +155,23 @@
   .settle.paid{background:var(--green-soft);border-color:rgba(30,180,237,.35);}
   .settle.paid .amt{color:var(--green-dark);}
   .paid-badge{display:inline-block;background:var(--green);color:#fff;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:99px;margin-left:8px;vertical-align:middle;}
+  .sum-card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px;margin-bottom:12px;}
+  .sum-label{font-size:13px;color:var(--muted);font-weight:600;margin:0 0 8px;}
+  .prog-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;}
+  .prog-head .lbl{font-size:13px;color:var(--muted);}
+  .prog-head .val{font-size:13px;font-weight:700;color:var(--green-dark);}
+  .prog-bar{height:8px;background:var(--bg);border-radius:99px;overflow:hidden;}
+  .prog-bar > i{display:block;height:100%;background:var(--green);border-radius:99px;transition:width .3s;}
+  .net-chips{display:flex;flex-wrap:wrap;gap:8px;}
+  .net-chip{display:flex;align-items:center;gap:7px;border-radius:99px;padding:5px 12px 5px 5px;font-size:13px;font-weight:700;white-space:nowrap;}
+  .net-chip .avatar{width:24px;height:24px;font-size:11px;}
+  .net-chip.neg{background:var(--red-soft);color:var(--red);}
+  .net-chip.pos{background:var(--green-soft);color:var(--green-dark);}
+  .net-chip.zero{background:var(--bg);color:var(--muted);}
+  .cleared-bar{display:flex;align-items:center;gap:10px;width:100%;background:var(--green-soft);border:none;border-radius:12px;padding:14px 16px;cursor:pointer;color:var(--green-dark);font-weight:700;font-size:15px;font-family:inherit;text-align:left;}
+  .cleared-bar .big{font-size:22px;line-height:1;}
+  .cleared-bar .chev{margin-left:auto;font-size:16px;transition:transform .2s;}
+  .cleared-bar.open .chev{transform:rotate(180deg);}
   .warn-line{font-size:11.5px;color:var(--amber);margin-top:7px;font-weight:600;}
 
   .total-banner{background:linear-gradient(135deg,var(--green),var(--green-dark));color:#fff;border-radius:var(--radius);padding:18px;margin-bottom:16px;box-shadow:var(--shadow-lg);}
@@ -329,12 +346,36 @@ function applyOpTo(d, op){
     case 'deleteExpense': { const t=T(op.tripId); if(t) t.expenses=(t.expenses||[]).filter(e=>e.id!==op.expenseId); break; }
     case 'setSettle': { const t=T(op.tripId); if(t){ t.settle=t.settle||{}; t.settle[op.key]=op.rec; } break; }
     case 'setRoundMode': d.roundMode=op.mode; break;
+    case 'setContact': { d.directory=d.directory||{}; if(op.contact&&op.contact.key) d.directory[op.contact.key]=op.contact; break; }
   }
   return d;
 }
 function sendOp(op){ if(socket && joined && socket.connected) socket.emit('op', op); else outbox.push(op); }
 /* แอ็กชันมาตรฐาน: ปรับ state -> ส่ง op -> แคช -> วาดใหม่ */
 function mutate(op){ applyOpTo(state, op); sendOp(op); cacheSave(); render(); }
+
+/* ---------- สมุดรายชื่อ: จำเบอร์ PromptPay / บ้าน ของแต่ละคน (ระดับกลุ่ม) ---------- */
+function contactKey(name){ return (name||'').trim().toLowerCase(); }
+function lookupContact(name){
+  const k=contactKey(name); if(!k) return null;
+  const dir=state.directory||{};
+  if(dir[k] && (dir[k].promptpay||dir[k].family)) return dir[k];
+  let found=null;
+  for(const t of (state.trips||[])) for(const m of (t.members||[]))
+    if(contactKey(m.name)===k && (m.promptpay||m.family)) found={name:m.name,promptpay:m.promptpay||'',family:m.family||''};
+  return found;
+}
+function rememberContact(name,promptpay,family){
+  const k=contactKey(name); if(!k || (!promptpay && !family)) return;
+  mutate({type:'setContact', contact:{key:k, name:(name||'').trim(), promptpay:promptpay||'', family:family||''}});
+}
+function prefillContact(){
+  const nameEl=$("#m_name"), ppEl=$("#m_pp"), famEl=$("#m_family");
+  const c=lookupContact(nameEl&&nameEl.value);
+  if(!c) return;
+  if(ppEl && !ppEl.value.trim() && c.promptpay) ppEl.value=c.promptpay;
+  if(famEl && !famEl.value.trim() && c.family) famEl.value=c.family;
+}
 
 /* ---------- ตั้งค่า WebSocket ---------- */
 function setupSocket(){
@@ -709,6 +750,43 @@ function renderMembersTab(tp){
 function unitAvatar(u){ const ini=(u.name||'?').trim().slice(0,2).toUpperCase(); return `<span class="avatar" style="background:${colorFor(u.key)}">${esc(ini)}</span>`; }
 function unitByKey(units, key){ return units.find(u=>u.key===key); }
 
+let showClearedSettle=false;
+function toggleCleared(){ showClearedSettle=!showClearedSettle; render(); }
+function renderSettleRows(tx, units, st){
+  let h='';
+  tx.forEach((t)=>{
+    const from = unitByKey(units,t.from), to = unitByKey(units,t.to);
+    const rec = st[t.from+'->'+t.to] || {};
+    const isPaid = !!rec.paid;
+    const hasSlip = !!rec.slip;
+    const amtChanged = isPaid && rec.amount!=null && Math.round(rec.amount*100)!==Math.round(t.amount*100);
+    let actions='';
+    if(!isPaid){
+      actions += to && to.promptpay
+        ? `<button class="btn btn-light btn-sm" onclick="showQR('${t.to}',${t.amount})">📲 QR โอน</button>`
+        : `<button class="btn btn-ghost btn-sm" onclick="openMemberForm('${to&&to.members[0]?to.members[0].id:''}')">＋ ใส่ PromptPay</button>`;
+    }
+    actions += hasSlip
+      ? `<button class="btn btn-ghost btn-sm" onclick="viewSlip('${t.from}','${t.to}')">🧾 ดูสลิป</button>`
+      : `<button class="btn btn-ghost btn-sm" onclick="attachSlip('${t.from}','${t.to}',${t.amount})">📎 แนบสลิป</button>`;
+    actions += isPaid
+      ? `<button class="btn btn-ghost btn-sm" onclick="togglePaid('${t.from}','${t.to}',${t.amount})">↩︎ ยกเลิก</button>`
+      : `<button class="btn btn-outline btn-sm" onclick="togglePaid('${t.from}','${t.to}',${t.amount})">○ กดเมื่อจ่ายแล้ว</button>`;
+    h += `<div class="settle ${isPaid?'paid':''}">
+      <div class="settle-main">
+        ${from?unitAvatar(from):''}
+        <span class="who">${esc(from?.name||'?')}</span>
+        <span class="arrow">→</span>
+        ${to?unitAvatar(to):''}
+        <span class="who">${esc(to?.name||'?')}</span>
+        <span class="amt">฿${fmt(t.amount)}${isPaid?'<span class="paid-badge">✓ จ่ายแล้ว</span>':''}</span>
+      </div>
+      ${amtChanged?`<div class="warn-line">⚠️ ยอดเปลี่ยนหลังทำเครื่องหมาย (ตอนนั้น ฿${fmt(rec.amount)}) — ตรวจสอบอีกครั้ง</div>`:''}
+      <div class="settle-actions">${actions}</div>
+    </div>`;
+  });
+  return h;
+}
 function renderSummaryTab(tp){
   const { bal, total, mode, exact, units } = effectiveUnitBalances(tp);
   if(total===0){
@@ -724,22 +802,44 @@ function renderSummaryTab(tp){
     <button class="pick ${mode==='satang'?'sel':''}" onclick="setRoundMode('satang')">แบบมีสตางค์</button>
   </div>`;
 
-  // ยอดแต่ละบ้าน/คน
-  html += `<div class="section-title">ยอดของแต่ละ${hasFam?'บ้าน':'คน'}</div><div class="card">`;
+  // ===== การ์ดรวม: ยอดสุทธิ + การโอน =====
+  const tx = settle(bal);
+  const st = tp.settle || {};
+  const paidCount = tx.filter(t=> st[t.from+'->'+t.to] && st[t.from+'->'+t.to].paid).length;
+  const allClear = tx.length>0 && paidCount===tx.length;
+
+  html += `<div class="sum-card">`;
+
+  // แถบความคืบหน้าการโอน
+  if(tx.length>0){
+    const pct = Math.round(paidCount/tx.length*100);
+    html += `<div class="prog-head"><span class="lbl">ความคืบหน้าการโอน</span><span class="val">เคลียร์แล้ว ${paidCount}/${tx.length}</span></div>
+      <div class="prog-bar"><i style="width:${pct}%"></i></div>`;
+  }
+
+  // ยอดสุทธิแต่ละบ้าน/คน (ชิป — โชว์เฉพาะยอดสุทธิ)
+  html += `<div class="sum-label" style="margin-top:${tx.length>0?'16px':'2px'}">ยอดของแต่ละ${hasFam?'บ้าน':'คน'}</div>`;
+  html += `<div class="net-chips">`;
   for(const u of units){
-    const b = bal[u.key]; const net = Math.round(b.net*100)/100;
+    const net = Math.round(bal[u.key].net*100)/100;
     const cls = net>0.005?'pos':(net<-0.005?'neg':'zero');
-    const txt = net>0.005?`ควรได้คืน ฿${fmt(net)}`:(net<-0.005?`ต้องจ่ายเพิ่ม ฿${fmt(-net)}`:'ลงตัวพอดี');
-    const isFam = u.members.length>1 || u.key.startsWith('f:');
-    const subName = isFam ? `🏠 ${esc(u.members.map(m=>m.name).join(', '))}<br>` : '';
-    html += `<div class="bal-row">
-      ${unitAvatar(u)}
-      <div class="bal-name">${esc(u.name)}<div class="bal-sub">${subName}จ่ายจริง ฿${fmt(b.paid)} · ส่วนที่ต้องจ่าย ฿${fmt(b.owed)}</div></div>
-      <div class="bal-amt ${cls}">${txt}</div>
-    </div>`;
+    const sign = net>0.005?`+฿${fmt(net)}`:(net<-0.005?`−฿${fmt(-net)}`:'฿0');
+    html += `<span class="net-chip ${cls}">${unitAvatar(u)}${esc(u.name)} ${sign}</span>`;
   }
   html += `</div>`;
-  if(mode==='baht') html += `<div class="hint" style="padding:0 4px 6px">ปัดยอดโอนเป็นจำนวนเต็มบาทเพื่อความสะดวก (เกลี่ยให้ยอดรวมตรงพอดี) · ดูยอดละเอียดมีสตางค์ได้ในตารางด้านล่าง</div>`;
+  if(mode==='baht') html += `<div class="hint">ปัดยอดโอนเป็นจำนวนเต็มบาท · ดูยอดละเอียดมีสตางค์ได้ในตารางด้านล่าง</div>`;
+
+  // การโอน
+  html += `<div class="sum-label" style="margin-top:16px">ใครต้องโอนให้ใคร <span class="badge">โอนน้อยครั้งที่สุด</span></div>`;
+  if(tx.length===0){
+    html += `<div class="settled-note" style="padding:18px 12px"><div class="big">🎉</div>ทุกคนเคลียร์กันเรียบร้อย<br>ไม่มีใครต้องโอนเพิ่ม</div>`;
+  }else if(allClear){
+    html += `<button class="cleared-bar ${showClearedSettle?'open':''}" onclick="toggleCleared()"><span class="big">✅</span><span>โอนครบทุกรายการแล้ว (${paidCount}/${tx.length})</span><span class="chev">▾</span></button>`;
+    html += `<div style="margin-top:10px;${showClearedSettle?'':'display:none'}">${renderSettleRows(tx,units,st)}</div>`;
+  }else{
+    html += renderSettleRows(tx,units,st);
+  }
+  html += `</div>`;
 
   // ตารางรายละเอียดแบบ Excel (ใครจ่าย / หารใคร) — คอลัมน์ = บ้าน/คน
   html += `<div class="section-title">ตารางรายละเอียด (เช็คทีละรายการ)</div>`;
@@ -775,51 +875,6 @@ function renderSummaryTab(tp){
   html += `</tr></tfoot></table></div>`;
   html += `<div class="hint" style="padding:6px 4px">ตารางนี้เป็น<strong>ยอดจริงละเอียด (มีสตางค์)</strong> ไว้เช็คทีละรายการ · 💳 = ${hasFam?'บ้าน':'คน'}ที่ออกเงินรายการนั้น · เลื่อนซ้าย–ขวาเพื่อดูครบ</div>`;
 
-  // การโอน (ระดับบ้าน)
-  const tx = settle(bal);
-  const st = tp.settle || {};
-  const paidCount = tx.filter(t=> st[t.from+'->'+t.to] && st[t.from+'->'+t.to].paid).length;
-  html += `<div class="section-title">ใครต้องโอนให้ใคร <span class="badge">โอนน้อยครั้งที่สุด</span></div>`;
-  if(tx.length===0){
-    html += `<div class="card settled-note"><div class="big">🎉</div>ทุกคนเคลียร์กันเรียบร้อย<br>ไม่มีใครต้องโอนเพิ่ม</div>`;
-  }else{
-    if(paidCount===tx.length){
-      html += `<div class="card settled-note" style="padding:18px"><div class="big">✅</div>โอนครบทุกรายการแล้ว (${paidCount}/${tx.length})</div>`;
-    }
-    html += `<div class="card">`;
-    tx.forEach((t)=>{
-      const from = unitByKey(units,t.from), to = unitByKey(units,t.to);
-      const rec = st[t.from+'->'+t.to] || {};
-      const isPaid = !!rec.paid;
-      const hasSlip = !!rec.slip;
-      const amtChanged = isPaid && rec.amount!=null && Math.round(rec.amount*100)!==Math.round(t.amount*100);
-      let actions='';
-      if(!isPaid){
-        actions += to && to.promptpay
-          ? `<button class="btn btn-light btn-sm" onclick="showQR('${t.to}',${t.amount})">📲 QR โอน</button>`
-          : `<button class="btn btn-ghost btn-sm" onclick="openMemberForm('${to&&to.members[0]?to.members[0].id:''}')">＋ ใส่ PromptPay</button>`;
-      }
-      actions += hasSlip
-        ? `<button class="btn btn-ghost btn-sm" onclick="viewSlip('${t.from}','${t.to}')">🧾 ดูสลิป</button>`
-        : `<button class="btn btn-ghost btn-sm" onclick="attachSlip('${t.from}','${t.to}',${t.amount})">📎 แนบสลิป</button>`;
-      actions += isPaid
-        ? `<button class="btn btn-ghost btn-sm" onclick="togglePaid('${t.from}','${t.to}',${t.amount})">↩︎ ยกเลิก</button>`
-        : `<button class="btn btn-outline btn-sm" onclick="togglePaid('${t.from}','${t.to}',${t.amount})">○ กดเมื่อจ่ายแล้ว</button>`;
-      html += `<div class="settle ${isPaid?'paid':''}">
-        <div class="settle-main">
-          ${from?unitAvatar(from):''}
-          <span class="who">${esc(from?.name||'?')}</span>
-          <span class="arrow">→</span>
-          ${to?unitAvatar(to):''}
-          <span class="who">${esc(to?.name||'?')}</span>
-          <span class="amt">฿${fmt(t.amount)}${isPaid?'<span class="paid-badge">✓ จ่ายแล้ว</span>':''}</span>
-        </div>
-        ${amtChanged?`<div class="warn-line">⚠️ ยอดเปลี่ยนหลังทำเครื่องหมาย (ตอนนั้น ฿${fmt(rec.amount)}) — ตรวจสอบอีกครั้ง</div>`:''}
-        <div class="settle-actions">${actions}</div>
-      </div>`;
-    });
-    html += `</div><div class="hint" style="padding:0 4px">เคลียร์แล้ว ${paidCount}/${tx.length} รายการ · กด "จ่ายแล้ว" หรือ "แนบสลิป" เมื่อโอนเสร็จ · กดปุ่มด้านล่างเพื่อส่งสรุปเข้ากลุ่ม LINE</div>`;
-  }
   // ปุ่มพรีวิว/บันทึก PDF (เล็ก ๆ ไว้ล่างสุด)
   html += `<div style="text-align:center;margin-top:16px"><button class="btn btn-ghost btn-sm" style="width:auto" onclick="exportPDF()">📄 พรีวิว / บันทึก PDF</button></div>`;
   return html;
@@ -892,7 +947,7 @@ function saveTrip(id){
     return;
   }
   const rawNames = $("#f_members").value.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
-  const members = rawNames.map(nm=>({id:uid(),name:nm}));
+  const members = rawNames.map(nm=>{ const c=lookupContact(nm); const m={id:uid(),name:nm}; if(c){ if(c.promptpay) m.promptpay=c.promptpay; if(c.family) m.family=c.family; } return m; });
   const t = { id:uid(), name, emoji, members, expenses:[], createdAt:new Date().toISOString() };
   if(fx) t.fx = fx;
   state.currentTripId=t.id; view="trip"; tab=members.length?"exp":"members";
@@ -914,7 +969,7 @@ function openMemberForm(id){
   const editing = id ? memberById(tp,id) : null;
   openSheet(editing?'แก้ไขสมาชิก':'เพิ่มสมาชิก', `
     <label class="fl">ชื่อ</label>
-    <input class="inp" id="m_name" placeholder="ชื่อสมาชิก" value="${editing?esc(editing.name):''}">
+    <input class="inp" id="m_name" placeholder="ชื่อสมาชิก" value="${editing?esc(editing.name):''}" ${editing?'':'onchange="prefillContact()"'}>
     <label class="fl">บ้าน/ครอบครัว (ไม่ใส่ = เดี่ยว)</label>
     <input class="inp" id="m_family" list="m_familylist" placeholder="เช่น บ้านเนง (คู่/ครอบครัวเดียวกันใส่ชื่อเดียวกัน)" value="${editing?esc(editing.family||''):''}">
     <datalist id="m_familylist">${[...new Set((tp.members||[]).map(m=>(m.family||'').trim()).filter(Boolean))].map(f=>`<option value="${esc(f)}"></option>`).join('')}</datalist>
@@ -941,6 +996,7 @@ function saveMember(id){
     mutate({type:'addMember', tripId:tp.id, member:{id:uid(), name, promptpay:ppRaw, family}});
     toast("เพิ่มสมาชิกแล้ว");
   }
+  rememberContact(name, ppRaw, family);
 }
 /* ----- แสดง QR PromptPay สำหรับการโอน (ระดับบ้าน) ----- */
 function showQR(unitKey, amount){
