@@ -76,6 +76,21 @@ async function saveSpace(id, data) {
   }
 }
 
+/* คิวประมวลผล op ต่อ space (กัน race condition: op หลายตัวจากคน/แอ็กชันเดียวกันมาชิดกัน) */
+const spaceQueues = new Map();
+function enqueueOp(space, op) {
+  const prev = spaceQueues.get(space) || Promise.resolve();
+  const next = prev.catch(() => {}).then(async () => {
+    const data = await loadSpace(space);
+    applyOp(data, op);
+    await saveSpace(space, data);
+  });
+  spaceQueues.set(space, next);
+  // ล้างคิวเมื่อจบ (กัน memory ค้าง)
+  next.finally(() => { if (spaceQueues.get(space) === next) spaceQueues.delete(space); });
+  return next;
+}
+
 /* =========================================================
    นำ op มาปรับข้อมูล (ตรงกับ action ในหน้าแอป)
    ========================================================= */
@@ -149,15 +164,13 @@ io.on('connection', (socket) => {
     } catch (e) { console.error('join load error', e); }
   });
 
-  socket.on('op', async (op) => {
+  socket.on('op', (op) => {
     const space = socket.data.space;
     if (!space || !op || !op.type) return;
-    try {
-      const data = await loadSpace(space);
-      applyOp(data, op);
-      await saveSpace(space, data);
-      socket.to(space).emit('op', op);     // ส่ง op ให้คนอื่นในกลุ่มเอาไป apply
-    } catch (e) { console.error('op error', e); }
+    // ใช้คิว/promise chain ต่อ space — ป้องกัน op หลายตัวโหลด-เซฟทับกัน (race)
+    enqueueOp(space, op).then(() => {
+      socket.to(space).emit('op', op);
+    }).catch((e) => console.error('op error', e));
   });
 });
 
