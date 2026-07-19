@@ -276,7 +276,7 @@ const CATS = ["🍜","🏨","🚗","⛽","🎟️","🛒","☕","🍻","🎁","�
 const STORE_KEY = "harn_kan_na_v1";
 
 /* ---------- สถานะ ---------- */
-let state = { trips: [], currentTripId: null, roundMode: 'baht' };
+let state = { trips: [], currentTripId: null, roundMode: 'baht', directory: {} };
 let liffReady = false, liffProfile = null;
 
 /* ---------- เรียลไทม์ (WebSocket) ---------- */
@@ -315,7 +315,7 @@ function adrunCredit(){
 function cacheSave(){
   try{
     if(!space) return;
-    localStorage.setItem('hkn:'+space, JSON.stringify({trips:state.trips, roundMode:state.roundMode}));
+    localStorage.setItem('hkn:'+space, JSON.stringify({trips:state.trips, roundMode:state.roundMode, directory:state.directory||{}}));
     localStorage.setItem('hkn_cur:'+space, state.currentTripId||'');
   }catch(e){}
 }
@@ -323,7 +323,7 @@ function cacheLoad(){
   try{
     if(!space) return;
     const d=localStorage.getItem('hkn:'+space);
-    if(d){ const o=JSON.parse(d); state.trips=o.trips||[]; state.roundMode=o.roundMode||'baht'; }
+    if(d){ const o=JSON.parse(d); state.trips=o.trips||[]; state.roundMode=o.roundMode||'baht'; state.directory=o.directory||{}; }
     const c=localStorage.getItem('hkn_cur:'+space); if(c) state.currentTripId=c;
   }catch(e){}
 }
@@ -385,6 +385,8 @@ function setupSocket(){
   socket.on('state', ({data})=>{
     state.trips = (data && data.trips) || [];
     if(data && data.roundMode) state.roundMode = data.roundMode;
+    // เอา directory (contact memory: บ้าน+PromptPay ตามชื่อ) มาด้วย ไม่งั้นจะหายทุกครั้งที่ reload
+    state.directory = Object.assign({}, state.directory||{}, (data && data.directory)||{});
     joined = true;
     if(outbox.length){ for(const op of outbox){ applyOpTo(state, op); socket.emit('op', op); } outbox.length=0; }
     cacheSave(); render();
